@@ -1,0 +1,65 @@
+﻿# ── .NET ──────────────────────────────────────────────────────────────────────
+*.user
+*.suo
+*.userosscache
+*.userprefs
+.vs/
+bin/
+obj/
+*.DotSettings.user
+TestResults/
+*.nupkg
+*.snupkg
+project.lock.json
+artifacts/
+
+# ── EF Core migrations compiled output ───────────────────────────────────────
+**/Migrations/*.Designer.cs
+
+# ── Publish output ────────────────────────────────────────────────────────────
+**/publish/
+**/PublishProfiles/
+
+# ── Node / Frontend ──────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+frontend/npm-debug.log*
+
+# ── Environment / Secrets ─────────────────────────────────────────────────────
+.env
+.env.local
+*.env
+appsettings.Development.json
+appsettings.Production.json
+secrets.json
+**/*.pfx
+**/*.pem
+**/*.key
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+Logs/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+!.vscode/extensions.json
+*.code-workspace
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
