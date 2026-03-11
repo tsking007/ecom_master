@@ -93,4 +93,27 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
             item.UpdatedAt = now;
         }
     }
+
+    public async Task ClearPurchasedItemsAsync(
+        Guid cartId,
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (productIds.Count == 0)
+            return;
+
+        var items = await _context.CartItems
+            .Where(ci =>
+                ci.CartId == cartId &&
+                !ci.IsDeleted &&
+                productIds.Contains(ci.ProductId))
+            .ToListAsync(cancellationToken);
+
+        var now = DateTime.UtcNow;
+        foreach (var item in items)
+        {
+            item.IsDeleted = true;
+            item.UpdatedAt = now;
+        }
+    }
 }

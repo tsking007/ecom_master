@@ -18,6 +18,8 @@ public interface IUnitOfWork : IDisposable
     INotificationRepository Notifications { get; }
     IRateLimitRepository RateLimits { get; }
 
+    IStockReservationRepository StockReservations { get; }
+
     // ── Persistence ───────────────────────────────────────────────────────────
 
     /// <summary>

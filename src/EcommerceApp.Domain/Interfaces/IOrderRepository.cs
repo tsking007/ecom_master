@@ -27,6 +27,11 @@ public interface IOrderRepository : IRepository<Order>
         TrackingStatus? status,
         CancellationToken cancellationToken = default);
 
+    Task<Order?> GetByIdForUserAsync(
+        Guid orderId,
+        Guid userId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Admin order list — multi-field filter: tracking status, payment status,
     /// date range, and free-text search on order number / customer email.

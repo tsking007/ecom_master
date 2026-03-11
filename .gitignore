@@ -12,6 +12,7 @@ TestResults/
 *.snupkg
 project.lock.json
 artifacts/
+appsettings.json
 
 # ── EF Core migrations compiled output ───────────────────────────────────────
 **/Migrations/*.Designer.cs

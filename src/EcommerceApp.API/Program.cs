@@ -9,10 +9,14 @@ using EcommerceApp.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Stripe;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+
+StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"]
+    ?? throw new InvalidOperationException("Stripe:SecretKey is not configured.");
 
 // ── Application layer ─────────────────────────────────────────────────────
 builder.Services.AddApplication();

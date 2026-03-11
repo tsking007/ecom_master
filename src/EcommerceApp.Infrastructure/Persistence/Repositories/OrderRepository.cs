@@ -24,6 +24,18 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
                 cancellationToken);
     }
 
+    public async Task<Order?> GetByIdForUserAsync(
+    Guid orderId,
+    Guid userId,
+    CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(x => x.Items.Where(i => !i.IsDeleted))
+            .FirstOrDefaultAsync(
+                x => x.Id == orderId && x.UserId == userId,
+                cancellationToken);
+    }
+
     public async Task<Order?> GetByStripeSessionIdAsync(
         string stripeSessionId,
         CancellationToken cancellationToken = default)

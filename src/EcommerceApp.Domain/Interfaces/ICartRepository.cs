@@ -41,4 +41,9 @@ public interface ICartRepository : IRepository<Cart>
     Task ClearCartAsync(
         Guid cartId,
         CancellationToken cancellationToken = default);
+    
+    Task ClearPurchasedItemsAsync(
+        Guid cartId,
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default);
 }

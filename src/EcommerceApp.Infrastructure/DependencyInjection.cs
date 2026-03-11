@@ -9,32 +9,15 @@ using Microsoft.Extensions.DependencyInjection;
 using EcommerceApp.Infrastructure.Notifications;
 using EcommerceApp.Application.Common.Interfaces;
 using EcommerceApp.Application.Interfaces;
-using EcommerceApp.Infrastructure.Persistence.Repositories;
-using EcommerceApp.Application.Common;
-using EcommerceApp.Domain.Interfaces;
 using EcommerceApp.Infrastructure.BackgroundServices;
 using EcommerceApp.Infrastructure.Search;
 using Microsoft.Extensions.Options;
 using Nest;
+using EcommerceApp.Infrastructure.Payments;
 
 namespace EcommerceApp.Infrastructure;
 
-/// <summary>
-/// Registers all Infrastructure layer services.
-/// Called once from Program.cs: services.AddInfrastructure(configuration);
-///
-/// ── PARTIAL — this file grows across parts ───────────────────────────────────
-/// Part  8: Auth services, repositories, DbContext
-/// Part 11: Email providers
-/// Part 12: SMS providers, NotificationService
-/// Part 15: Search services, Quartz sync job
-/// Part 16: Cart background service
-/// Part 17: Price drop alert handler
-/// Part 19: Stripe payment service, Stock reservation cleanup
-/// Part 22: Rate limit service
-/// Part 25: Complete final wiring with all remaining services
-/// ─────────────────────────────────────────────────────────────────────────────
-/// </summary>
+
 public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(
@@ -46,7 +29,24 @@ public static class DependencyInjection
             .AddAuthServices(configuration)
             .AddRepositories()
             .AddNotifications(configuration)
-            .AddSearch(configuration);
+            .AddSearch(configuration)
+            .AddPayments(configuration);
+
+        return services;
+    }
+
+
+    //Payments
+    private static IServiceCollection AddPayments(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        services.Configure<StripeSettings>(
+            configuration.GetSection(StripeSettings.SectionName));
+
+        services.AddScoped<IStripePaymentService, StripePaymentService>();
+
+        services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
 
         return services;
     }
