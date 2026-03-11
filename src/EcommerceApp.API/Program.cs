@@ -5,12 +5,15 @@ using EcommerceApp.Application;
 using EcommerceApp.Application.Common;
 using EcommerceApp.Domain.Interfaces;
 using EcommerceApp.Infrastructure;
+using EcommerceApp.Infrastructure.Notifications;
 using EcommerceApp.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Stripe;
 using System.Text;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -86,6 +89,65 @@ builder.Services.AddControllers(options =>
 builder.Services.AddScoped<INotificationService, NotificationService>();
 builder.Services.AddScoped<IRateLimitService, RateLimitService>();
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Writes a consistent JSON body when the in-memory limiter rejects a request
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.ContentType = "application/json";
+
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            ctx.HttpContext.Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString();
+
+        await ctx.HttpContext.Response.WriteAsync(
+            """{"statusCode":429,"message":"Too many requests. Please slow down."}""",
+            ct);
+    };
+
+    // ── "products" policy: 60 req / min per IP ────────────────────────────────
+    options.AddPolicy("products", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // ── "search" policy: 30 req / min per IP ─────────────────────────────────
+    options.AddPolicy("search", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // ── "general" policy: 100 req / min per IP ────────────────────────────────
+    // Applied to cart, wishlist, orders, banners
+    options.AddPolicy("general", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+});
+
 // ── Swagger with JWT bearer ────────────────────────────────────────────────
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -156,6 +218,8 @@ app.UseMiddleware<SessionValidationMiddleware>();
 
 // 5. Authorization — enforces [Authorize] attributes
 app.UseAuthorization();
+
+app.UseRateLimiter();
 
 app.MapControllers();
 

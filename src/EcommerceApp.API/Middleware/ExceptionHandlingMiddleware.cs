@@ -59,8 +59,15 @@ public class ExceptionHandlingMiddleware
             ConflictException ce => (409, ce.Message, null),
             UnauthorizedException ue => (401, ue.Message, null),
             ForbiddenException fe => (403, fe.Message, null),
+            RateLimitExceededException re => (429, re.Message, null),
             _ => (500, "An unexpected error occurred.", null)
         };
+
+        if (exception is RateLimitExceededException rle && rle.RetryAfter.HasValue)
+        {
+            context.Response.Headers["Retry-After"] =
+                ((int)rle.RetryAfter.Value.TotalSeconds).ToString();
+        }
 
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json";

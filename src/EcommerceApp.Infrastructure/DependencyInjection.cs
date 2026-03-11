@@ -199,6 +199,7 @@ public static class DependencyInjection
         // ── ADD this line inside the existing AddRepositories() method ────────────────
         services.AddScoped<IBannerRepository, BannerRepository>();
 
+        services.AddScoped<IRateLimitRepository, RateLimitRepository>();
         // NOTE: The remaining feature repositories are registered automatically
         // through IUnitOfWork lazy initialization (Part 5 UnitOfWork.cs).
         // Individual repos are only registered here when a handler injects

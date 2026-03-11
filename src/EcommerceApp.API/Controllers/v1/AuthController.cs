@@ -1,7 +1,10 @@
-﻿using EcommerceApp.Application.Features.Auth.Commands;
-using EcommerceApp.Application.Features.Auth.Queries;
+﻿using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Features.Auth.Commands;
 using EcommerceApp.Application.Features.Auth.DTOs;
+using EcommerceApp.Application.Features.Auth.Queries;
+using EcommerceApp.Domain.Interfaces;
 using EcommerceApp.Infrastructure.Auth;
+using EcommerceApp.Infrastructure.Notifications;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,10 +19,12 @@ namespace EcommerceApp.API.Controllers.v1;
 public class AuthController : ControllerBase
 {
     private readonly IMediator _mediator;
+    private readonly IRateLimitService _rateLimitService;
 
-    public AuthController(IMediator mediator)
+    public AuthController(IMediator mediator, IRateLimitService rateLimitService)
     {
         _mediator = mediator;
+        _rateLimitService = rateLimitService;
     }
 
   
@@ -75,19 +80,48 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<VerifyOtpResponse>> VerifyOtp(
-        [FromBody] VerifyOtpRequest request,
-        CancellationToken cancellationToken)
+     [FromBody] VerifyOtpRequest request,
+     CancellationToken cancellationToken)
     {
-        var result = await _mediator.Send(
-            new VerifyOtpCommand(
-                Identifier: request.Identifier,
-                Otp: request.Otp,
-                Purpose: request.Purpose,
-                IpAddress: GetClientIp(),
-                DeviceInfo: Request.Headers.UserAgent.ToString()),
-            cancellationToken);
+        var identifier = request.Identifier.ToLowerInvariant();
 
-        // If OTP verification creates a session (e.g., EmailVerification), set cookie
+        var allowed = await _rateLimitService
+            .IsOtpVerifyAllowedAsync(identifier, cancellationToken);
+
+        if (!allowed)
+        {
+            var remaining = await _rateLimitService
+                .GetRemainingBlockDurationAsync(identifier, "OTP_VERIFY", cancellationToken);
+
+            throw new RateLimitExceededException(
+                "Too many failed attempts. Your account is temporarily blocked.",
+                retryAfter: remaining);
+        }
+
+        VerifyOtpResponse result;
+        try
+        {
+            result = await _mediator.Send(
+                new VerifyOtpCommand(
+                    Identifier: request.Identifier,
+                    Otp: request.Otp,
+                    Purpose: request.Purpose,
+                    IpAddress: GetClientIp(),
+                    DeviceInfo: Request.Headers.UserAgent.ToString()),
+                cancellationToken);
+        }
+        catch (Exception)
+        {
+            // OTP was wrong — record the failure
+            await _rateLimitService
+                .RecordOtpVerifyFailAsync(identifier, cancellationToken);
+            throw;
+        }
+
+        // OTP was correct — clear the failure counter
+        await _rateLimitService
+            .RecordOtpVerifySuccessAsync(identifier, cancellationToken);
+
         if (result.IsAuthenticated && !string.IsNullOrEmpty(result.Auth?.RefreshToken))
             SetRefreshTokenCookie(result.Auth.RefreshToken);
 
@@ -97,14 +131,33 @@ public class AuthController : ControllerBase
 
     [HttpPost("forgot-password")]
     [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> ForgotPassword(
         [FromBody] ForgotPasswordRequest request,
         CancellationToken cancellationToken)
     {
+        var identifier = request.Email.ToLowerInvariant();
+        
+        var allowed = await _rateLimitService
+        .IsOtpSendAllowedAsync(identifier, cancellationToken);
+
+        if (!allowed)
+        {
+            var remaining = await _rateLimitService
+                .GetRemainingBlockDurationAsync(identifier, "OTP_SEND", cancellationToken);
+
+            throw new RateLimitExceededException(
+                "Too many OTP requests. Please wait before requesting another code.",
+                retryAfter: remaining);
+        }
+
         await _mediator.Send(
             new ForgotPasswordCommand(Email: request.Email),
             cancellationToken);
+
+        await _rateLimitService.RecordOtpSendAsync(identifier, cancellationToken);
 
         return Ok(new
         {

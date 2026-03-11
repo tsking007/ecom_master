@@ -4,6 +4,7 @@ using EcommerceApp.Domain.Common;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace EcommerceApp.API.Controllers;
 
@@ -22,6 +23,7 @@ namespace EcommerceApp.API.Controllers;
 [ApiController]
 [Route("api/search")]
 [AllowAnonymous]
+[EnableRateLimiting("search")]
 public class SearchController : ControllerBase
 {
     private readonly ISender _sender;
