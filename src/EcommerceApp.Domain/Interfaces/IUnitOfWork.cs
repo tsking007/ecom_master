@@ -20,6 +20,8 @@ public interface IUnitOfWork : IDisposable
 
     IStockReservationRepository StockReservations { get; }
 
+    IAddressRepository Addresses { get; }
+
     // ── Persistence ───────────────────────────────────────────────────────────
 
     /// <summary>

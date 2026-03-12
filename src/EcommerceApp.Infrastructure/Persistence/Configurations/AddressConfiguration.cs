@@ -60,9 +60,6 @@ public class AddressConfiguration : IEntityTypeConfiguration<Address>
         builder.HasIndex(a => new { a.UserId, a.IsDefault })
             .HasDatabaseName("IX_Addresses_UserId_IsDefault");
 
-        // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(a => !a.IsDeleted);
-
         // ── Relationships ─────────────────────────────────────────────────────
         builder.HasOne(a => a.User)
             .WithMany(u => u.Addresses)

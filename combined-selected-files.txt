@@ -1,1598 +1,1357 @@
-﻿===== FILE: src/EcommerceApp.API/Controllers/ProductsController.cs =====
-using EcommerceApp.API.Models.Requests.Products;
-using EcommerceApp.Application.Features.Products.DTOs;
-using EcommerceApp.Application.Features.Products.Queries;
-using EcommerceApp.Domain.Common;
-using MediatR;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Address.cs
+================================================================================
 
-namespace EcommerceApp.API.Controllers;
-
-/// <summary>
-/// Public product catalogue endpoints — no authentication required.
-/// All queries use IsActive: true so inactive products are invisible to shoppers.
-/// </summary>
-[ApiController]
-[Route("api/products")]
-[AllowAnonymous]
-[EnableRateLimiting("products")]
-public class ProductsController : ControllerBase
-{
-    private readonly ISender _sender;
-
-    public ProductsController(ISender sender) => _sender = sender;
-
-    // ── GET /api/products ──────────────────────────────────────────────────────
-    // ?pageNumber=1&pageSize=20&category=Shoes&brand=Nike&minPrice=500&sortBy=price
-    [HttpGet]
-    [ProducesResponseType(typeof(PagedResult<ProductListDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetProducts(
-        [FromQuery] GetProductsRequest req,
-        CancellationToken ct)
-    {
-        var query = new GetProductsQuery(
-            PageNumber: req.PageNumber,
-            PageSize: req.PageSize,
-            Category: req.Category,
-            SubCategory: req.SubCategory,
-            MinPrice: req.MinPrice,
-            MaxPrice: req.MaxPrice,
-            MinRating: req.MinRating,
-            Brand: req.Brand,
-            SortBy: req.SortBy,
-            SortDescending: req.SortDescending,
-            IsActive: true);           // public always sees active only
-
-        return Ok(await _sender.Send(query, ct));
-    }
-
-    // ── GET /api/products/categories ──────────────────────────────────────────
-    [HttpGet("categories")]
-    [ProducesResponseType(typeof(IReadOnlyList<CategoryDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetCategories(CancellationToken ct)
-        => Ok(await _sender.Send(new GetCategoriesQuery(), ct));
-
-    // ── GET /api/products/bestsellers?count=8 ─────────────────────────────────
-    [HttpGet("bestsellers")]
-    [ProducesResponseType(typeof(IReadOnlyList<ProductListDto>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetBestsellers(
-        [FromQuery] int count = 8,
-        CancellationToken ct = default)
-        => Ok(await _sender.Send(new GetBestsellersQuery(count), ct));
-
-    // ── GET /api/products/{slug} ───────────────────────────────────────────────
-    // Must be declared LAST — {slug} is a catch-all and would swallow
-    // /categories and /bestsellers if placed before them.
-    [HttpGet("{slug}")]
-    [ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetBySlug(string slug, CancellationToken ct)
-        => Ok(await _sender.Send(new GetProductBySlugQuery(Slug: slug), ct));
-}
-
-
-===== FILE: src/EcommerceApp.API/Controllers/SearchController.cs =====
-using EcommerceApp.Application.Features.Search.DTOs;
-using EcommerceApp.Application.Features.Search.Queries;
-using EcommerceApp.Domain.Common;
-using MediatR;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
-
-namespace EcommerceApp.API.Controllers;
-
-/// <summary>
-/// Product search endpoint.
-///
-/// GET /api/search?term=shoes&page=1&pageSize=20
-///
-/// Routes to whichever ISearchService is active:
-///   - SearchSettings:Provider = "Elasticsearch" → full fuzzy search
-///   - SearchSettings:Provider = "Sql"           → LIKE-based fallback
-///
-/// Anonymous — no auth required.
-/// Rate limited in Part 22 (token bucket: 100 tokens/min, 2/sec refill).
-/// </summary>
-[ApiController]
-[Route("api/search")]
-[AllowAnonymous]
-[EnableRateLimiting("search")]
-public class SearchController : ControllerBase
-{
-    private readonly ISender _sender;
-
-    public SearchController(ISender sender) => _sender = sender;
-
-    // ── GET /api/search ───────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Search products by text query.
-    /// Returns a paginated result set matching the search term.
-    /// </summary>
-    [HttpGet]
-    [ProducesResponseType(typeof(PagedResult<SearchResultDto>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Search(
-        [FromQuery] string term,
-        [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20,
-        CancellationToken ct = default)
-    {
-        var result = await _sender.Send(
-            new SearchProductsQuery(term, page, pageSize), ct);
-
-        return Ok(result);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.API/Controllers/v1/CartController.cs =====
-using EcommerceApp.Application.Features.Cart.Commands;
-using EcommerceApp.Application.Features.Cart.DTOs;
-using EcommerceApp.Application.Features.Cart.Queries;
-using MediatR;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-
-namespace EcommerceApp.API.Controllers.v1;
-
-[ApiController]
-[Route("api/v1/cart")]
-[Authorize]
-public class CartController : ControllerBase
-{
-    private readonly ISender _sender;
-
-    public CartController(ISender sender)
-    {
-        _sender = sender;
-    }
-
-    [HttpGet]
-    [ProducesResponseType(typeof(CartDto), StatusCodes.Status200OK)]
-    public async Task<IActionResult> GetCart(CancellationToken ct)
-    {
-        var result = await _sender.Send(new GetCartQuery(), ct);
-        return Ok(result);
-    }
-
-    [HttpPost]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> AddToCart(
-        [FromBody] AddToCartRequest request,
-        CancellationToken ct)
-    {
-        await _sender.Send(new AddToCartCommand(request.ProductId, request.Quantity), ct);
-        return Ok(new { message = "Item added to cart." });
-    }
-
-    [HttpPut("{cartItemId:guid}")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UpdateCartItem(
-        Guid cartItemId,
-        [FromBody] UpdateCartItemRequest request,
-        CancellationToken ct)
-    {
-        await _sender.Send(new UpdateCartItemCommand(cartItemId, request.Quantity), ct);
-        return Ok(new { message = "Cart item updated." });
-    }
-
-    [HttpDelete("{cartItemId:guid}")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> RemoveCartItem(Guid cartItemId, CancellationToken ct)
-    {
-        await _sender.Send(new RemoveCartItemCommand(cartItemId), ct);
-        return Ok(new { message = "Cart item removed." });
-    }
-
-    [HttpDelete]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> ClearCart(CancellationToken ct)
-    {
-        await _sender.Send(new ClearCartCommand(), ct);
-        return Ok(new { message = "Cart cleared." });
-    }
-
-    public class AddToCartRequest
-    {
-        public Guid ProductId { get; set; }
-        public int Quantity { get; set; }
-    }
-
-    public class UpdateCartItemRequest
-    {
-        public int Quantity { get; set; }
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/ProductDto.cs =====
-namespace EcommerceApp.Application.Features.Products.DTOs;
-
-/// <summary>
-/// Full product detail — returned by GetProductBySlugQuery.
-/// Used on the product detail page.
-/// </summary>
-public class ProductDto
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string Slug { get; set; } = string.Empty;
-    public string Description { get; set; } = string.Empty;
-    public string? ShortDescription { get; set; }
-    public string? Brand { get; set; }
-    public decimal Price { get; set; }
-    public decimal? DiscountedPrice { get; set; }
-    public decimal EffectivePrice { get; set; }
-    public decimal? DiscountPercentage { get; set; }
-    public int StockQuantity { get; set; }
-    public int ReservedQuantity { get; set; }
-    public int AvailableStock { get; set; }
-    public bool IsActive { get; set; }
-    public bool IsFeatured { get; set; }
-    public string Category { get; set; } = string.Empty;
-    public string? SubCategory { get; set; }
-    public List<string> ImageUrls { get; set; } = new();
-    public string? MainImageUrl { get; set; }
-    public string? VideoUrl { get; set; }
-    public List<string> Tags { get; set; } = new();
-    public decimal? Weight { get; set; }
-    public string? Dimensions { get; set; }
-    public double AverageRating { get; set; }
-    public int ReviewCount { get; set; }
-    public int SoldCount { get; set; }
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/ProductListDto.cs =====
-namespace EcommerceApp.Application.Features.Products.DTOs;
-
-/// <summary>
-/// Lightweight product card — returned by GetProductsQuery and GetBestsellersQuery.
-/// Omits full description, all images, tags, and dimensions to keep payload small.
-/// </summary>
-public class ProductListDto
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string Slug { get; set; } = string.Empty;
-    public string? ShortDescription { get; set; }
-    public string? Brand { get; set; }
-    public decimal Price { get; set; }
-    public decimal? DiscountedPrice { get; set; }
-    public decimal EffectivePrice { get; set; }
-    public decimal? DiscountPercentage { get; set; }
-    public int AvailableStock { get; set; }
-    public bool IsActive { get; set; }
-    public bool IsFeatured { get; set; }
-    public string Category { get; set; } = string.Empty;
-    public string? SubCategory { get; set; }
-    public string? MainImageUrl { get; set; }
-    public double AverageRating { get; set; }
-    public int ReviewCount { get; set; }
-    public int SoldCount { get; set; }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/CategoryDto.cs =====
-namespace EcommerceApp.Application.Features.Products.DTOs;
-
-/// <summary>
-/// Category name with active product count.
-/// Category is a simple string property on Product in this design — not a separate entity.
-/// </summary>
-public record CategoryDto(
-    string Category,
-    int Count);
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetProductsQuery.cs =====
-using AutoMapper;
-using EcommerceApp.Application.Features.Products.DTOs;
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Products.Queries;
-
-// ── Query ─────────────────────────────────────────────────────────────────────
-
-public record GetProductsQuery(
-    int PageNumber = 1,
-    int PageSize = 20,
-    string? Category = null,
-    string? SubCategory = null,
-    decimal? MinPrice = null,
-    decimal? MaxPrice = null,
-    double? MinRating = null,
-    string? Brand = null,
-    string? SortBy = null,
-    bool SortDescending = true,
-    bool? IsActive = true   // ← ADDED: null = all (admin), true = active only (public)
-) : IRequest<PagedResult<ProductListDto>>;
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-public class GetProductsQueryHandler
-    : IRequestHandler<GetProductsQuery, PagedResult<ProductListDto>>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IMapper _mapper;
-
-    public GetProductsQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
-    {
-        _unitOfWork = unitOfWork;
-        _mapper = mapper;
-    }
-
-    public async Task<PagedResult<ProductListDto>> Handle(
-        GetProductsQuery query,
-        CancellationToken cancellationToken)
-    {
-        var pageSize = Math.Min(query.PageSize, 100);
-
-        var paged = await _unitOfWork.Products.GetPagedAsync(
-            pageNumber: query.PageNumber,
-            pageSize: pageSize,
-            category: query.Category,
-            subCategory: query.SubCategory,
-            minPrice: query.MinPrice,
-            maxPrice: query.MaxPrice,
-            minRating: query.MinRating,
-            brand: query.Brand,
-            sortBy: query.SortBy,
-            sortDescending: query.SortDescending,
-            isActive: query.IsActive,   // ← CHANGED: was hardcoded true
-            cancellationToken: cancellationToken);
-
-        var dtos = _mapper.Map<IReadOnlyList<ProductListDto>>(paged.Items);
-
-        return PagedResult<ProductListDto>.Create(
-            dtos, paged.TotalCount, paged.PageNumber, paged.PageSize);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetProductBySlugQuery.cs =====
-using AutoMapper;
-using EcommerceApp.Application.Common.Exceptions;
-using EcommerceApp.Application.Features.Products.DTOs;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Products.Queries;
-
-// ── Query ─────────────────────────────────────────────────────────────────────
-
-public record GetProductBySlugQuery(
-    string? Slug = null,
-    Guid? Id = null,
-    bool IgnoreActiveFilter = false   // ← ADDED: admin sets this true to see inactive products
-) : IRequest<ProductDto>;
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-public class GetProductBySlugQueryHandler
-    : IRequestHandler<GetProductBySlugQuery, ProductDto>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IMapper _mapper;
-
-    public GetProductBySlugQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
-    {
-        _unitOfWork = unitOfWork;
-        _mapper = mapper;
-    }
-
-    public async Task<ProductDto> Handle(
-        GetProductBySlugQuery query,
-        CancellationToken cancellationToken)
-    {
-        Domain.Entities.Product? product = null;
-
-        if (query.Slug is not null)
-            product = await _unitOfWork.Products.GetBySlugAsync(
-                query.Slug, cancellationToken);
-        else if (query.Id.HasValue)
-            product = await _unitOfWork.Products.GetByIdAsync(
-                query.Id.Value, cancellationToken);
-
-        // Public: inactive products are treated as not found
-        // Admin: passes IgnoreActiveFilter = true so inactive products are visible
-        var notFound = product == null ||
-                       (!query.IgnoreActiveFilter && !product.IsActive);
-
-        if (notFound)
-            throw new NotFoundException(
-                "Product",
-                (object?)query.Slug ?? query.Id?.ToString() ?? "unknown");
-
-        return _mapper.Map<ProductDto>(product);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetBestsellersQuery.cs =====
-using AutoMapper;
-using EcommerceApp.Application.Features.Products.DTOs;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Products.Queries;
-
-// ── Query ─────────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Returns the top-N products ordered by SoldCount descending.
-/// Used on the Home page "Bestsellers" row.
-/// </summary>
-public record GetBestsellersQuery(int Count = 8) : IRequest<IReadOnlyList<ProductListDto>>;
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-public class GetBestsellersQueryHandler
-    : IRequestHandler<GetBestsellersQuery, IReadOnlyList<ProductListDto>>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IMapper _mapper;
-
-    public GetBestsellersQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
-    {
-        _unitOfWork = unitOfWork;
-        _mapper = mapper;
-    }
-
-    public async Task<IReadOnlyList<ProductListDto>> Handle(
-        GetBestsellersQuery query,
-        CancellationToken cancellationToken)
-    {
-        var count = Math.Clamp(query.Count, 1, 50);
-        var products = await _unitOfWork.Products.GetBestsellersAsync(
-            count, cancellationToken);
-
-        return _mapper.Map<IReadOnlyList<ProductListDto>>(products);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetCategoriesQuery.cs =====
-using EcommerceApp.Application.Features.Products.DTOs;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Products.Queries;
-
-// ── Query ─────────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Returns all distinct categories with the count of active products in each.
-/// Used on the Home page Category Grid and the All Categories page.
-/// </summary>
-public record GetCategoriesQuery : IRequest<IReadOnlyList<CategoryDto>>;
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-public class GetCategoriesQueryHandler
-    : IRequestHandler<GetCategoriesQuery, IReadOnlyList<CategoryDto>>
-{
-    private readonly IUnitOfWork _unitOfWork;
-
-    public GetCategoriesQueryHandler(IUnitOfWork unitOfWork)
-    {
-        _unitOfWork = unitOfWork;
-    }
-
-    public async Task<IReadOnlyList<CategoryDto>> Handle(
-        GetCategoriesQuery query,
-        CancellationToken cancellationToken)
-    {
-        var categoriesWithCount = await _unitOfWork.Products
-            .GetCategoriesWithCountAsync(cancellationToken);
-
-        return categoriesWithCount
-            .Select(c => new CategoryDto(c.Category, c.Count))
-            .ToList();
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartDto.cs =====
-namespace EcommerceApp.Application.Features.Cart.DTOs;
-
-public class CartDto
-{
-    public Guid CartId { get; set; }
-    public Guid UserId { get; set; }
-    public int TotalItems { get; set; }
-    public decimal Subtotal { get; set; }
-    public bool HasOutOfStockItems { get; set; }
-    public bool HasPriceChanges { get; set; }
-    public List<CartItemDto> Items { get; set; } = new();
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartItemDto.cs =====
-namespace EcommerceApp.Application.Features.Cart.DTOs;
-
-public class CartItemDto
-{
-    public Guid CartItemId { get; set; }
-    public Guid ProductId { get; set; }
-    public string ProductName { get; set; } = string.Empty;
-    public string ProductSlug { get; set; } = string.Empty;
-    public string? MainImageUrl { get; set; }
-
-    public int Quantity { get; set; }
-
-    // Snapshot at time of adding
-    public decimal PriceAtAddition { get; set; }
-
-    // Live price from Product
-    public decimal CurrentUnitPrice { get; set; }
-
-    public decimal LineTotal { get; set; }
-
-    public int AvailableStock { get; set; }
-    public bool IsOutOfStock { get; set; }
-    public bool HasPriceChanged { get; set; }
-    public bool IsActiveProduct { get; set; }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Cart/Commands/AddToCartCommand.cs =====
-using EcommerceApp.Application.Common;
-using EcommerceApp.Application.Common.Exceptions;
-using EcommerceApp.Domain.Entities;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Cart.Commands;
-
-public record AddToCartCommand(Guid ProductId, int Quantity) : IRequest;
-
-public class AddToCartCommandHandler : IRequestHandler<AddToCartCommand>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly ICurrentUserService _currentUserService;
-
-    public AddToCartCommandHandler(
-        IUnitOfWork unitOfWork,
-        ICurrentUserService currentUserService)
-    {
-        _unitOfWork = unitOfWork;
-        _currentUserService = currentUserService;
-    }
-
-    public async Task Handle(AddToCartCommand request, CancellationToken cancellationToken)
-    {
-        var userId = _currentUserService.UserId
-            ?? throw new UnauthorizedException("User is not authenticated.");
-
-        var product = await _unitOfWork.Products.GetByIdAsync(request.ProductId, cancellationToken)
-            ?? throw new NotFoundException("Product", request.ProductId);
-
-        if (!product.IsActive)
-            throw new ValidationException("ProductId", "Product is inactive and cannot be added to cart.");
-
-        if (product.AvailableStock < request.Quantity)
-            throw new ValidationException("Quantity",
-                $"Only {product.AvailableStock} units are available.");
-
-        var cart = await _unitOfWork.Carts.GetByUserIdAsync(userId, cancellationToken);
-
-        if (cart == null)
-        {
-            cart = new Domain.Entities.Cart
-            {
-                UserId = userId,
-                LastActivityAt = DateTime.UtcNow
-            };
-
-            await _unitOfWork.Carts.AddAsync(cart, cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-        }
-
-        var existingItem = await _unitOfWork.Carts.GetCartItemAsync(cart.Id, request.ProductId, cancellationToken);
-
-        if (existingItem != null)
-        {
-            var newQuantity = existingItem.Quantity + request.Quantity;
-
-            if (newQuantity > product.AvailableStock)
-                throw new ValidationException("Quantity",
-                    $"Cannot add more than available stock. Available: {product.AvailableStock}.");
-
-            existingItem.Quantity = newQuantity;
-            cart.LastActivityAt = DateTime.UtcNow;
-
-            await _unitOfWork.Carts.UpdateAsync(cart, cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-            return;
-        }
-
-        var item = new CartItem
-        {
-            CartId = cart.Id,
-            ProductId = product.Id,
-            Quantity = request.Quantity,
-            UnitPrice = product.EffectivePrice
-        };
-
-        await _unitOfWork.Carts.AddCartItemAsync(item, cancellationToken);
-
-        cart.LastActivityAt = DateTime.UtcNow;
-        await _unitOfWork.Carts.UpdateAsync(cart, cancellationToken);
-
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Cart/Queries/GetCartQuery.cs =====
-using EcommerceApp.Application.Common;
-using EcommerceApp.Application.Features.Cart.DTOs;
-using EcommerceApp.Application.Common.Exceptions;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Cart.Queries;
-
-public record GetCartQuery : IRequest<CartDto>;
-
-public class GetCartQueryHandler : IRequestHandler<GetCartQuery, CartDto>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly ICurrentUserService _currentUserService;
-
-    public GetCartQueryHandler(
-        IUnitOfWork unitOfWork,
-        ICurrentUserService currentUserService)
-    {
-        _unitOfWork = unitOfWork;
-        _currentUserService = currentUserService;
-    }
-
-    public async Task<CartDto> Handle(GetCartQuery request, CancellationToken cancellationToken)
-    {
-        var userId = _currentUserService.UserId
-            ?? throw new UnauthorizedException("User is not authenticated.");
-
-        var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken);
-
-        if (cart == null)
-        {
-            return new CartDto
-            {
-                CartId = Guid.Empty,
-                UserId = userId,
-                TotalItems = 0,
-                Subtotal = 0,
-                HasOutOfStockItems = false,
-                HasPriceChanges = false,
-                Items = new List<CartItemDto>()
-            };
-        }
-
-        var items = cart.Items.Select(i =>
-        {
-            var currentPrice = i.Product.EffectivePrice;
-            var availableStock = i.Product.AvailableStock;
-            var isOutOfStock = !i.Product.IsActive || availableStock <= 0 || i.Quantity > availableStock;
-            var hasPriceChanged = i.UnitPrice != currentPrice;
-
-            return new CartItemDto
-            {
-                CartItemId = i.Id,
-                ProductId = i.ProductId,
-                ProductName = i.Product.Name,
-                ProductSlug = i.Product.Slug,
-                MainImageUrl = i.Product.ImageUrls.FirstOrDefault(),
-                Quantity = i.Quantity,
-                PriceAtAddition = i.UnitPrice,
-                CurrentUnitPrice = currentPrice,
-                LineTotal = currentPrice * i.Quantity,
-                AvailableStock = availableStock,
-                IsOutOfStock = isOutOfStock,
-                HasPriceChanged = hasPriceChanged,
-                IsActiveProduct = i.Product.IsActive
-            };
-        }).ToList();
-
-        return new CartDto
-        {
-            CartId = cart.Id,
-            UserId = cart.UserId,
-            TotalItems = items.Sum(x => x.Quantity),
-            Subtotal = items.Sum(x => x.LineTotal),
-            HasOutOfStockItems = items.Any(x => x.IsOutOfStock),
-            HasPriceChanges = items.Any(x => x.HasPriceChanged),
-            Items = items
-        };
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Search/DTOs/SearchResultDto.cs =====
-namespace EcommerceApp.Application.Features.Search.DTOs;
-
-/// <summary>
-/// Search result item returned from either Elasticsearch or the SQL fallback.
-/// Shape is identical regardless of which backend is active so the frontend
-/// never needs to change when the search provider is switched.
-/// </summary>
-public class SearchResultDto
-{
-    public Guid Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-    public string Slug { get; set; } = string.Empty;
-    public string? ShortDescription { get; set; }
-    public string? Brand { get; set; }
-    public decimal Price { get; set; }
-    public decimal? DiscountedPrice { get; set; }
-    public decimal EffectivePrice { get; set; }
-    public string Category { get; set; } = string.Empty;
-    public string? SubCategory { get; set; }
-    public string? MainImageUrl { get; set; }
-    public double AverageRating { get; set; }
-    public int ReviewCount { get; set; }
-    public int SoldCount { get; set; }
-    public bool IsActive { get; set; }
-    /// <summary>
-    /// Relevance score from Elasticsearch, or a computed relevance value
-    /// from the SQL fallback. Used for result ranking.
-    /// </summary>
-    public double? Score { get; set; }
-}
-
-
-===== FILE: src/EcommerceApp.Application/Features/Search/Queries/SearchProductsQuery.cs =====
-using EcommerceApp.Application.Features.Search.DTOs;
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Application.Interfaces;
-using FluentValidation;
-using MediatR;
-
-namespace EcommerceApp.Application.Features.Search.Queries;
-
-// ── Query ─────────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Full-text product search query.
-/// Dispatched by SearchController and routed to whichever ISearchService
-/// implementation is active (Elasticsearch or SQL fallback).
-/// </summary>
-public record SearchProductsQuery(
-    string Term,
-    int Page = 1,
-    int PageSize = 20
-) : IRequest<PagedResult<SearchResultDto>>;
-
-// ── Validator ─────────────────────────────────────────────────────────────────
-
-public class SearchProductsQueryValidator : AbstractValidator<SearchProductsQuery>
-{
-    public SearchProductsQueryValidator()
-    {
-        RuleFor(x => x.Term)
-            .NotEmpty().WithMessage("Search term is required.")
-            .MinimumLength(1).WithMessage("Search term must be at least 1 character.")
-            .MaximumLength(200).WithMessage("Search term must not exceed 200 characters.");
-
-        RuleFor(x => x.Page)
-            .GreaterThanOrEqualTo(1).WithMessage("Page must be at least 1.");
-
-        RuleFor(x => x.PageSize)
-            .InclusiveBetween(1, 100)
-            .WithMessage("Page size must be between 1 and 100.");
-    }
-}
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-public class SearchProductsQueryHandler
-    : IRequestHandler<SearchProductsQuery, PagedResult<SearchResultDto>>
-{
-    private readonly ISearchService _searchService;
-
-    public SearchProductsQueryHandler(ISearchService searchService)
-    {
-        _searchService = searchService;
-    }
-
-    public async Task<PagedResult<SearchResultDto>> Handle(
-        SearchProductsQuery query,
-        CancellationToken cancellationToken)
-    {
-        return await _searchService.SearchAsync(
-            term: query.Term,
-            page: query.Page,
-            pageSize: Math.Min(query.PageSize, 100),
-            cancellationToken: cancellationToken);
-    }
-}
-
-
-===== FILE: src/EcommerceApp.Domain/Entities/Product.cs =====
 using EcommerceApp.Domain.Common;
 
 namespace EcommerceApp.Domain.Entities;
 
-public class Product : BaseEntity
+public class Address : BaseEntity
 {
-    public string Name { get; set; } = string.Empty;
+    public Guid UserId { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public string AddressLine1 { get; set; } = string.Empty;
+    public string? AddressLine2 { get; set; }
+    public string City { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+    public string PostalCode { get; set; } = string.Empty;
+    public string Country { get; set; } = string.Empty;
+    public bool IsDefault { get; set; } = false;
 
-    // URL-friendly unique identifier e.g. "apple-iphone-15-pro-128gb"
-    public string Slug { get; set; } = string.Empty;
+    // "Home" | "Work" | "Other"
+    public string AddressType { get; set; } = "Home";
 
-    public string Description { get; set; } = string.Empty;
-    public string? ShortDescription { get; set; }
-    public decimal Price { get; set; }
-    public decimal? DiscountedPrice { get; set; }
+    // -- Navigation ------------------------------------------------------------
+    public User User { get; set; } = null!;
+}
 
-    // Total physical stock in warehouse
-    public int StockQuantity { get; set; } = 0;
 
-    // Units currently locked by pending Stripe checkout sessions
-    public int ReservedQuantity { get; set; } = 0;
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/User.cs
+================================================================================
 
-    public string Category { get; set; } = string.Empty;
-    public string? SubCategory { get; set; }
-    public string? Brand { get; set; }
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Enums;
+using System.Net;
 
-    // Stored as JSON array in the database column
-    public List<string> ImageUrls { get; set; } = new();
-    public string? VideoUrl { get; set; }
-    public List<string> Tags { get; set; } = new();
+namespace EcommerceApp.Domain.Entities;
 
-    public double AverageRating { get; set; } = 0;
-    public int ReviewCount { get; set; } = 0;
-    public int SoldCount { get; set; } = 0;
+public class User : BaseEntity
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string? PhoneNumber { get; set; }
+    public string PasswordHash { get; set; } = string.Empty;
+    public UserRole Role { get; set; } = UserRole.Customer;
+    public bool IsEmailVerified { get; set; } = false;
+    public bool IsPhoneVerified { get; set; } = false;
     public bool IsActive { get; set; } = true;
-    public bool IsFeatured { get; set; } = false;
-    public decimal? Weight { get; set; }
-    public string? Dimensions { get; set; }
+    public string? ProfileImageUrl { get; set; }
+    public DateTime? DateOfBirth { get; set; }
 
-    // ── Computed ──────────────────────────────────────────────────────────────
+    // -- Computed --------------------------------------------------------------
+    public string FullName => $"{FirstName} {LastName}".Trim();
 
-    // The price customers actually pay
-    public decimal EffectivePrice => DiscountedPrice ?? Price;
-
-    // % discount shown on the UI (null if no discount)
-    public decimal? DiscountPercentage => DiscountedPrice.HasValue && Price > 0
-        ? Math.Round((1 - DiscountedPrice.Value / Price) * 100, 0)
-        : null;
-
-    // How many units can still be added to cart
-    public int AvailableStock => Math.Max(0, StockQuantity - ReservedQuantity);
-
-    // ── Navigation ────────────────────────────────────────────────────────────
-    public ICollection<CartItem> CartItems { get; set; }
-        = new List<CartItem>();
-    public ICollection<OrderItem> OrderItems { get; set; }
-        = new List<OrderItem>();
+    // -- Navigation ------------------------------------------------------------
+    public Cart? Cart { get; set; }
+    public ICollection<Order> Orders { get; set; }
+        = new List<Order>();
+    public ICollection<Address> Addresses { get; set; }
+        = new List<Address>();
     public ICollection<ProductReview> Reviews { get; set; }
         = new List<ProductReview>();
     public ICollection<Wishlist> WishlistItems { get; set; }
         = new List<Wishlist>();
+    public ICollection<TokenStore> TokenStores { get; set; }
+        = new List<TokenStore>();
+    public ICollection<OtpStore> OtpStores { get; set; }
+        = new List<OtpStore>();
+    public ICollection<NotificationLog> NotificationLogs { get; set; }
+        = new List<NotificationLog>();
     public ICollection<StockReservation> StockReservations { get; set; }
         = new List<StockReservation>();
-    public ElasticStore? ElasticStoreEntry { get; set; }
 }
 
 
-===== FILE: src/EcommerceApp.Domain/Common/PagedResult.cs =====
-namespace EcommerceApp.Domain.Common;
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Order.cs
+================================================================================
 
-public class PagedResult<T>
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Enums;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Order : BaseEntity
 {
-    public IReadOnlyList<T> Items { get; }
-    public int TotalCount { get; }
-    public int PageNumber { get; }
-    public int PageSize { get; }
-    public int TotalPages => PageSize > 0
-        ? (int)Math.Ceiling(TotalCount / (double)PageSize)
-        : 0;
-    public bool HasNextPage => PageNumber < TotalPages;
-    public bool HasPreviousPage => PageNumber > 1;
-    public bool IsEmpty => !Items.Any();
+    public Guid UserId { get; set; }
 
-    public PagedResult(IReadOnlyList<T> items, int totalCount, int pageNumber, int pageSize)
-    {
-        Items = items;
-        TotalCount = totalCount;
-        PageNumber = pageNumber;
-        PageSize = pageSize;
-    }
+    // Human-readable order reference e.g. "ORD-20240115-00034"
+    public string OrderNumber { get; set; } = string.Empty;
 
-    // ── Factory methods ───────────────────────────────────────────────────────
+    // -- Financials ------------------------------------------------------------
+    public decimal SubTotal { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
+    public decimal ShippingAmount { get; set; } = 0;
+    public decimal TaxAmount { get; set; } = 0;
+    public decimal TotalAmount { get; set; }
 
-    public static PagedResult<T> Create(
-        IReadOnlyList<T> items,
-        int totalCount,
+    // -- Status ----------------------------------------------------------------
+    public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
+    public TrackingStatus TrackingStatus { get; set; } = TrackingStatus.Placed;
+
+    // -- Stripe ----------------------------------------------------------------
+    public string? StripeSessionId { get; set; }
+    public string? StripePaymentIntentId { get; set; }
+
+    // -- Optional fields -------------------------------------------------------
+    public string? CouponCode { get; set; }
+
+    // JSON-serialized snapshot of the Address at time of order placement.
+    // Stored as a plain JSON string so it survives address deletion/edits.
+    public string ShippingAddressSnapshot { get; set; } = string.Empty;
+
+    public string? Notes { get; set; }
+    public string? TrackingNumber { get; set; }
+    public DateTime? EstimatedDeliveryDate { get; set; }
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? ReturnRequestedAt { get; set; }
+    public string? ReturnReason { get; set; }
+
+    // -- Navigation ------------------------------------------------------------
+    public User User { get; set; } = null!;
+    public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Interfaces/IUserRepository.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+
+namespace EcommerceApp.Domain.Interfaces;
+
+public interface IUserRepository : IRepository<User>
+{
+    Task<User?> GetByEmailAsync(
+        string email,
+        CancellationToken cancellationToken = default);
+
+    Task<User?> GetByPhoneNumberAsync(
+        string phoneNumber,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the user with all their Address records eagerly loaded.
+    /// Used in the profile and checkout flows.
+    /// </summary>
+    Task<User?> GetWithAddressesAsync(
+        Guid userId,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> EmailExistsAsync(
+        string email,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> PhoneExistsAsync(
+        string phoneNumber,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admin user list � supports free-text search on name/email and
+    /// filtering by active status.
+    /// </summary>
+    Task<PagedResult<User>> GetPagedAsync(
         int pageNumber,
-        int pageSize)
-        => new(items, totalCount, pageNumber, pageSize);
-
-    public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 10)
-        => new(new List<T>(), 0, pageNumber, pageSize);
-
-    // ── Projection helper ─────────────────────────────────────────────────────
-
-    public PagedResult<TOut> Map<TOut>(Func<T, TOut> mapper)
-        => new(Items.Select(mapper).ToList(), TotalCount, PageNumber, PageSize);
-
-    //public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 20)
-    //=> new(new List<T>(), 0, pageNumber, pageSize);
+        int pageSize,
+        string? searchTerm,
+        bool? isActive,
+        CancellationToken cancellationToken = default);
 }
 
 
-===== FILE: frontend/src/api/axiosInstance.js =====
-import axios from 'axios';
-import { store } from '../store/store.js';
-import { setCredentials, logout } from '../store/slices/authSlice.js';
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://localhost:7262';
-
-const axiosInstance = axios.create({
-  baseURL: BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// â”€â”€ Request interceptor: attach access token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-axiosInstance.interceptors.request.use(
-  (config) => {
-    const state = store.getState();
-    const token = state.auth.accessToken;
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
-
-// â”€â”€ Response interceptor: silent token refresh on 401 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-let isRefreshing = false;
-let failedQueue = [];
-
-const processQueue = (error, token = null) => {
-  failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve(token);
-    }
-  });
-  failedQueue = [];
-};
-
-axiosInstance.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-
-    // Don't retry refresh endpoint itself or already-retried requests
-    if (
-      error.response?.status === 401 &&
-      !originalRequest._retry &&
-      !originalRequest.url.includes('/auth/refresh') &&
-      !originalRequest.url.includes('/auth/login')
-    ) {
-      if (isRefreshing) {
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-          .then((token) => {
-            originalRequest.headers.Authorization = `Bearer ${token}`;
-            return axiosInstance(originalRequest);
-          })
-          .catch((err) => Promise.reject(err));
-      }
-
-      originalRequest._retry = true;
-      isRefreshing = true;
-
-      const state = store.getState();
-      const { accessToken, refreshToken } = state.auth;
-
-      try {
-        const response = await axios.post(
-          `${BASE_URL}/api/v1/auth/refresh`,
-          { accessToken, refreshToken },
-          { headers: { 'Content-Type': 'application/json' } }
-        );
-
-        const { accessToken: newAccessToken, refreshToken: newRefreshToken,
-                accessTokenExpiresAt, refreshTokenExpiresAt } = response.data;
-
-        store.dispatch(
-          setCredentials({
-            accessToken: newAccessToken,
-            refreshToken: newRefreshToken,
-            accessTokenExpiresAt,
-            refreshTokenExpiresAt,
-          })
-        );
-
-        processQueue(null, newAccessToken);
-        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-        return axiosInstance(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError, null);
-        store.dispatch(logout());
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
-      }
-    }
-
-    return Promise.reject(error);
-  }
-);
-
-export default axiosInstance;
-
-
-===== FILE: frontend/src/api/authApi.js =====
-import axiosInstance from './axiosInstance.js';
-
-const AUTH_BASE = '/api/v1/auth';
-
-// â”€â”€ Signup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: { email, message }
-export const signupApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/signup`, data);
-
-// â”€â”€ Verify OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// purpose: 1 = EmailVerification, 2 = ForgotPassword (based on your OtpPurpose enum)
-// Response: { isAuthenticated, auth, passwordResetToken, message }
-export const verifyOtpApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/verify-otp`, data);
-
-// â”€â”€ Login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
-export const loginApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/login`, data);
-
-// â”€â”€ Logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: 204 No Content
-export const logoutApi = () =>
-  axiosInstance.post(`${AUTH_BASE}/logout`);
-
-// â”€â”€ Forgot Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: 200 or 204
-export const forgotPasswordApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/forgot-password`, data);
-
-// â”€â”€ Reset Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: 204 No Content
-export const resetPasswordApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/reset-password`, data);
-
-// â”€â”€ Refresh Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
-export const refreshTokenApi = (data) =>
-  axiosInstance.post(`${AUTH_BASE}/refresh`, data);
-
-// â”€â”€ Get Current User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Response: UserDto
-export const getMeApi = () =>
-  axiosInstance.get(`${AUTH_BASE}/me`);
-
-
-===== FILE: frontend/src/store/store.js =====
-import { configureStore } from '@reduxjs/toolkit';
-import authReducer from './slices/authSlice.js';
-
-export const store = configureStore({
-  reducer: {
-    auth: authReducer,
-  },
-  middleware: (getDefaultMiddleware) =>
-    getDefaultMiddleware({
-      serializableCheck: {
-        // Ignore date strings in auth state
-        ignoredPaths: ['auth.accessTokenExpiresAt', 'auth.refreshTokenExpiresAt'],
-      },
-    }),
-});
-
-
-===== FILE: frontend/src/store/slices/authSlice.js =====
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import {
-  loginApi,
-  logoutApi,
-  signupApi,
-  verifyOtpApi,
-  forgotPasswordApi,
-  resetPasswordApi,
-  getMeApi,
-} from '../../api/authApi.js';
-
-// â”€â”€ Helper: persist tokens to localStorage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const saveTokens = ({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }) => {
-  localStorage.setItem('accessToken', accessToken);
-  localStorage.setItem('refreshToken', refreshToken);
-  localStorage.setItem('accessTokenExpiresAt', accessTokenExpiresAt);
-  localStorage.setItem('refreshTokenExpiresAt', refreshTokenExpiresAt);
-};
-
-const clearTokens = () => {
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('refreshToken');
-  localStorage.removeItem('accessTokenExpiresAt');
-  localStorage.removeItem('refreshTokenExpiresAt');
-};
-
-// â”€â”€ Thunks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-export const loginThunk = createAsyncThunk(
-  'auth/login',
-  async (credentials, { rejectWithValue }) => {
-    try {
-      const response = await loginApi(credentials);
-      return response.data;
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || err.response?.data?.title || 'Login failed'
-      );
-    }
-  }
-);
-
-export const signupThunk = createAsyncThunk(
-  'auth/signup',
-  async (userData, { rejectWithValue }) => {
-    try {
-      const response = await signupApi(userData);
-      return response.data; // { email, message }
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || err.response?.data?.title || 'Signup failed'
-      );
-    }
-  }
-);
-
-export const verifyOtpThunk = createAsyncThunk(
-  'auth/verifyOtp',
-  async (otpData, { rejectWithValue }) => {
-    try {
-      const response = await verifyOtpApi(otpData);
-      return response.data; // { isAuthenticated, auth, passwordResetToken, message }
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || err.response?.data?.title || 'OTP verification failed'
-      );
-    }
-  }
-);
-
-export const logoutThunk = createAsyncThunk(
-  'auth/logout',
-  async (_, { rejectWithValue }) => {
-    try {
-      await logoutApi();
-    } catch (err) {
-      // Always clear locally even if server call fails
-    }
-  }
-);
-
-export const forgotPasswordThunk = createAsyncThunk(
-  'auth/forgotPassword',
-  async (data, { rejectWithValue }) => {
-    try {
-      await forgotPasswordApi(data);
-      return true;
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || err.response?.data?.title || 'Request failed'
-      );
-    }
-  }
-);
-
-export const resetPasswordThunk = createAsyncThunk(
-  'auth/resetPassword',
-  async (data, { rejectWithValue }) => {
-    try {
-      await resetPasswordApi(data);
-      return true;
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || err.response?.data?.title || 'Reset failed'
-      );
-    }
-  }
-);
-
-export const fetchCurrentUserThunk = createAsyncThunk(
-  'auth/fetchCurrentUser',
-  async (_, { rejectWithValue }) => {
-    try {
-      const response = await getMeApi();
-      return response.data;
-    } catch (err) {
-      return rejectWithValue('Session expired');
-    }
-  }
-);
-
-// â”€â”€ Initial State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const initialState = {
-  user: null,
-  accessToken: localStorage.getItem('accessToken') || null,
-  refreshToken: localStorage.getItem('refreshToken') || null,
-  accessTokenExpiresAt: localStorage.getItem('accessTokenExpiresAt') || null,
-  refreshTokenExpiresAt: localStorage.getItem('refreshTokenExpiresAt') || null,
-  isAuthenticated: !!localStorage.getItem('accessToken'),
-
-  // Signup flow: temporarily hold email for OTP step
-  pendingEmail: null,
-  // Forgot password flow: hold email for OTP step
-  pendingResetEmail: null,
-  // Reset password flow: hold token from OTP verify
-  passwordResetToken: null,
-
-  loading: false,
-  error: null,
-};
-
-// â”€â”€ Slice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const authSlice = createSlice({
-  name: 'auth',
-  initialState,
-  reducers: {
-    // Called by axios interceptor after silent refresh
-    // Inside authSlice reducers:
-    setPendingResetEmail: (state, action) => {
-        state.pendingResetEmail = action.payload;
-    },
-    setCredentials: (state, action) => {
-      const { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
-      state.accessToken = accessToken;
-      state.refreshToken = refreshToken;
-      state.accessTokenExpiresAt = accessTokenExpiresAt;
-      state.refreshTokenExpiresAt = refreshTokenExpiresAt;
-      saveTokens(action.payload);
-    },
-    logout: (state) => {
-      state.user = null;
-      state.accessToken = null;
-      state.refreshToken = null;
-      state.accessTokenExpiresAt = null;
-      state.refreshTokenExpiresAt = null;
-      state.isAuthenticated = false;
-      state.pendingEmail = null;
-      state.pendingResetEmail = null;
-      state.passwordResetToken = null;
-      state.error = null;
-      clearTokens();
-    },
-    clearError: (state) => {
-      state.error = null;
-    },
-    clearPendingState: (state) => {
-      state.pendingEmail = null;
-      state.pendingResetEmail = null;
-      state.passwordResetToken = null;
-    },
-  },
-  extraReducers: (builder) => {
-    // â”€â”€ Login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(loginThunk.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(loginThunk.fulfilled, (state, action) => {
-        state.loading = false;
-        const { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
-        state.user = user;
-        state.accessToken = accessToken;
-        state.refreshToken = refreshToken;
-        state.accessTokenExpiresAt = accessTokenExpiresAt;
-        state.refreshTokenExpiresAt = refreshTokenExpiresAt;
-        state.isAuthenticated = true;
-        saveTokens({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt });
-      })
-      .addCase(loginThunk.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
-      });
-
-    // â”€â”€ Signup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(signupThunk.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(signupThunk.fulfilled, (state, action) => {
-        state.loading = false;
-        state.pendingEmail = action.payload.email;
-      })
-      .addCase(signupThunk.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
-      });
-
-    // â”€â”€ Verify OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(verifyOtpThunk.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(verifyOtpThunk.fulfilled, (state, action) => {
-        state.loading = false;
-        const { isAuthenticated, auth, passwordResetToken } = action.payload;
-        if (isAuthenticated && auth) {
-          state.user = auth.user;
-          state.accessToken = auth.accessToken;
-          state.refreshToken = auth.refreshToken;
-          state.accessTokenExpiresAt = auth.accessTokenExpiresAt;
-          state.refreshTokenExpiresAt = auth.refreshTokenExpiresAt;
-          state.isAuthenticated = true;
-          state.pendingEmail = null;
-          saveTokens({
-            accessToken: auth.accessToken,
-            refreshToken: auth.refreshToken,
-            accessTokenExpiresAt: auth.accessTokenExpiresAt,
-            refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
-          });
-        }
-        // Forgot password OTP flow â€” store reset token
-        if (passwordResetToken) {
-          state.passwordResetToken = passwordResetToken;
-          state.pendingResetEmail = null;
-        }
-      })
-      .addCase(verifyOtpThunk.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
-      });
-
-    // â”€â”€ Logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(logoutThunk.fulfilled, (state) => {
-        state.user = null;
-        state.accessToken = null;
-        state.refreshToken = null;
-        state.accessTokenExpiresAt = null;
-        state.refreshTokenExpiresAt = null;
-        state.isAuthenticated = false;
-        state.error = null;
-        clearTokens();
-      });
-
-    // â”€â”€ Forgot Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(forgotPasswordThunk.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(forgotPasswordThunk.fulfilled, (state, action) => {
-        state.loading = false;
-        // pendingResetEmail is set before dispatch in the component
-      })
-      .addCase(forgotPasswordThunk.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
-      });
-
-    // â”€â”€ Reset Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(resetPasswordThunk.pending, (state) => {
-        state.loading = true;
-        state.error = null;
-      })
-      .addCase(resetPasswordThunk.fulfilled, (state) => {
-        state.loading = false;
-        state.passwordResetToken = null;
-      })
-      .addCase(resetPasswordThunk.rejected, (state, action) => {
-        state.loading = false;
-        state.error = action.payload;
-      });
-
-    // â”€â”€ Fetch Current User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    builder
-      .addCase(fetchCurrentUserThunk.fulfilled, (state, action) => {
-        state.user = action.payload;
-        state.isAuthenticated = true;
-      })
-      .addCase(fetchCurrentUserThunk.rejected, (state) => {
-        state.user = null;
-        state.isAuthenticated = false;
-        clearTokens();
-      });
-  },
-});
-
-export const { setCredentials, logout, clearError, clearPendingState,setPendingResetEmail } = authSlice.actions;
-export default authSlice.reducer;
-
-// â”€â”€ Selectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-export const selectCurrentUser = (state) => state.auth.user;
-export const selectIsAuthenticated = (state) => state.auth.isAuthenticated;
-export const selectAuthLoading = (state) => state.auth.loading;
-export const selectAuthError = (state) => state.auth.error;
-export const selectPendingEmail = (state) => state.auth.pendingEmail;
-export const selectPendingResetEmail = (state) => state.auth.pendingResetEmail;
-export const selectPasswordResetToken = (state) => state.auth.passwordResetToken;
-export const selectAccessToken = (state) => state.auth.accessToken;
-
-
-===== FILE: frontend/src/routes/AppRouter.jsx =====
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useSelector } from 'react-redux';
-import { selectIsAuthenticated } from '../store/slices/authSlice.js';
-import ProtectedRoute from './ProtectedRoute.jsx';
-
-import LoginPage from '../pages/LoginPage.jsx';
-import SignupPage from '../pages/SignupPage.jsx';
-import VerifyOtpPage from '../pages/VerifyOtpPage.jsx';
-import ForgotPasswordPage from '../pages/ForgotPasswordPage.jsx';
-import ResetPasswordPage from '../pages/ResetPasswordPage.jsx';
-
-// Placeholder pages â€” will be replaced as we build them out
-const HomePage = () => <div className="p-5 text-center"><h2>Home Page (Coming Soon)</h2></div>;
-const DashboardPage = () => <div className="p-5 text-center"><h2>Dashboard (Protected)</h2></div>;
-
-// Redirect authenticated users away from auth pages
-const GuestRoute = ({ children }) => {
-  const isAuthenticated = useSelector(selectIsAuthenticated);
-  return isAuthenticated ? <Navigate to="/" replace /> : children;
-};
-
-const AppRouter = () => {
-  return (
-    <BrowserRouter>
-      <Routes>
-        {/* Public routes */}
-        <Route path="/" element={<HomePage />} />
-
-        {/* Auth routes â€” redirect away if already logged in */}
-        <Route
-          path="/auth/login"
-          element={
-            <GuestRoute>
-              <LoginPage />
-            </GuestRoute>
-          }
-        />
-        <Route
-          path="/auth/signup"
-          element={
-            <GuestRoute>
-              <SignupPage />
-            </GuestRoute>
-          }
-        />
-        <Route
-          path="/auth/verify-otp"
-          element={<VerifyOtpPage />}
-        />
-        <Route
-          path="/auth/forgot-password"
-          element={
-            <GuestRoute>
-              <ForgotPasswordPage />
-            </GuestRoute>
-          }
-        />
-        <Route
-          path="/auth/reset-password"
-          element={<ResetPasswordPage />}
-        />
-
-        {/* Protected routes */}
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <DashboardPage />
-            </ProtectedRoute>
-          }
-        />
-
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
-  );
-};
-
-export default AppRouter;
-
-
-===== FILE: frontend/src/App.jsx =====
-import { ToastContainer } from 'react-toastify';
-import AppRouter from './routes/AppRouter.jsx';
-import { useTokenRefresh } from './hooks/useTokenRefresh.js';
-import './App.css';
-
-function App() {
-  useTokenRefresh();
-
-  return (
-    <>
-      <AppRouter />
-      <ToastContainer
-        position="top-right"
-        autoClose={3000}
-        hideProgressBar={false}
-        newestOnTop
-        closeOnClick
-        pauseOnFocusLoss
-        draggable
-        pauseOnHover
-        theme="colored"
-      />
-    </>
-  );
-}
-
-export default App;
-
-
-===== FILE: frontend/package.json =====
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Payments/Commands/CreateCheckoutSessionCommand.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Features.Payments.DTOs;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Enums;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+using Microsoft.Extensions.Options;
+using System.Text.Json;
+
+namespace EcommerceApp.Application.Features.Payments.Commands;
+
+public record CreateCheckoutSessionCommand(Guid? AddressId = null)
+    : IRequest<CheckoutSessionResponseDto>;
+
+public class CreateCheckoutSessionCommandHandler
+    : IRequestHandler<CreateCheckoutSessionCommand, CheckoutSessionResponseDto>
 {
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@hookform/resolvers": "^3.9.1",
-    "@microsoft/signalr": "^8.0.7",
-    "@reduxjs/toolkit": "^2.3.0",
-    "@stripe/react-stripe-js": "^2.9.0",
-    "@stripe/stripe-js": "^4.10.0",
-    "axios": "^1.7.9",
-    "bootstrap": "^5.3.3",
-    "date-fns": "^4.1.0",
-    "react": "^18.3.1",
-    "react-bootstrap": "^2.10.6",
-    "react-dom": "^18.3.1",
-    "react-hook-form": "^7.54.0",
-    "react-icons": "^5.4.0",
-    "react-image-gallery": "^1.3.0",
-    "react-redux": "^9.1.2",
-    "react-router-dom": "^6.28.0",
-    "react-slick": "^0.30.2",
-    "react-toastify": "^10.0.6",
-    "sass": "^1.83.0",
-    "slick-carousel": "^1.8.1",
-    "yup": "^1.4.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.15.0",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.3",
-    "eslint": "^9.15.0",
-    "eslint-plugin-react": "^7.37.2",
-    "eslint-plugin-react-hooks": "^5.0.0",
-    "eslint-plugin-react-refresh": "^0.4.16",
-    "globals": "^15.12.0",
-    "vite": "^5.4.0"
-  }
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUserService;
+    private readonly IStripePaymentService _stripePaymentService;
+    private readonly StripeSettings _stripeSettings;
+    private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
+
+    public CreateCheckoutSessionCommandHandler(
+        IUnitOfWork unitOfWork,
+        ICurrentUserService currentUserService,
+        IStripePaymentService stripePaymentService,
+        IOptions<StripeSettings> stripeOptions,
+        ICheckoutTransactionExecutor checkoutTransactionExecutor)
+    {
+        _unitOfWork = unitOfWork;
+        _currentUserService = currentUserService;
+        _stripePaymentService = stripePaymentService;
+        _stripeSettings = stripeOptions.Value;
+        _checkoutTransactionExecutor = checkoutTransactionExecutor;
+    }
+
+    public async Task<CheckoutSessionResponseDto> Handle(
+        CreateCheckoutSessionCommand request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+            ?? throw new UnauthorizedException("User is not authenticated.");
+
+        var user = await _unitOfWork.Users.GetWithAddressesAsync(userId, cancellationToken)
+            ?? throw new NotFoundException("User", userId);
+
+        var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken)
+            ?? throw new ValidationException("Cart is empty.");
+
+        var activeItems = cart.Items
+            .Where(i => !i.IsDeleted)
+            .ToList();
+
+        if (activeItems.Count == 0)
+            throw new ValidationException("Cart is empty.");
+
+        foreach (var item in activeItems)
+        {
+            if (item.Product == null)
+                throw new NotFoundException("Product", item.ProductId);
+
+            if (!item.Product.IsActive)
+                throw new ValidationException(
+                    $"Product '{item.Product.Name}' is inactive and cannot be checked out.");
+
+            if (item.Quantity > item.Product.AvailableStock)
+            {
+                throw new ValidationException(
+                    $"Insufficient stock for '{item.Product.Name}'. Requested {item.Quantity}, available {item.Product.AvailableStock}.");
+            }
+        }
+
+        var address = request.AddressId.HasValue
+            ? user.Addresses.FirstOrDefault(a => a.Id == request.AddressId.Value && !a.IsDeleted)
+            : user.Addresses.FirstOrDefault(a => a.IsDefault && !a.IsDeleted);
+
+        if (address == null)
+            throw new ValidationException("A valid shipping address is required for checkout.");
+
+        var subTotal = activeItems.Sum(x => x.Product.EffectivePrice * x.Quantity);
+        var totalAmount = subTotal;
+
+        var orderNumber = await _unitOfWork.Orders.GenerateOrderNumberAsync(cancellationToken);
+
+        var addressSnapshot = JsonSerializer.Serialize(new
+        {
+            address.Id,
+            address.FullName,
+            address.PhoneNumber,
+            address.AddressLine1,
+            address.AddressLine2,
+            address.City,
+            address.State,
+            address.PostalCode,
+            address.Country,
+            address.AddressType
+        });
+
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            OrderNumber = orderNumber,
+            SubTotal = subTotal,
+            DiscountAmount = 0,
+            ShippingAmount = 0,
+            TaxAmount = 0,
+            TotalAmount = totalAmount,
+            PaymentStatus = PaymentStatus.Pending,
+            TrackingStatus = TrackingStatus.Placed,
+            ShippingAddressSnapshot = addressSnapshot,
+            EstimatedDeliveryDate = DateTime.UtcNow.AddDays(7),
+            Items = activeItems.Select(item => new OrderItem
+            {
+                ProductId = item.ProductId,
+                ProductName = item.Product.Name,
+                ProductImageUrl = item.Product.ImageUrls.FirstOrDefault(),
+                ProductSlug = item.Product.Slug,
+                UnitPrice = item.Product.Price,
+                DiscountedUnitPrice = item.Product.DiscountedPrice,
+                Quantity = item.Quantity,
+                TotalPrice = item.Product.EffectivePrice * item.Quantity
+            }).ToList()
+        };
+
+        var stripeRequest = new StripeCheckoutSessionRequest(
+            CustomerEmail: user.Email,
+            Currency: _stripeSettings.Currency,
+            SuccessUrl: _stripeSettings.SuccessUrl,
+            CancelUrl: _stripeSettings.CancelUrl,
+            Items: activeItems.Select(item => new StripeCheckoutLineItem(
+                Name: item.Product.Name,
+                Description: item.Product.ShortDescription,
+                ImageUrl: item.Product.ImageUrls.FirstOrDefault(),
+                UnitAmount: ToStripeAmount(item.Product.EffectivePrice),
+                Quantity: item.Quantity
+            )).ToList(),
+            Metadata: new Dictionary<string, string>
+            {
+                ["orderId"] = order.Id.ToString(),
+                ["orderNumber"] = order.OrderNumber,
+                ["userId"] = userId.ToString()
+            });
+
+        return await _checkoutTransactionExecutor.ExecuteAsync(async ct =>
+        {
+            var stripeSession = await _stripePaymentService.CreateCheckoutSessionAsync(
+                stripeRequest,
+                ct);
+
+            order.StripeSessionId = stripeSession.SessionId;
+            order.StripePaymentIntentId = stripeSession.PaymentIntentId;
+
+            await _unitOfWork.Orders.AddAsync(order, ct);
+
+            foreach (var item in activeItems)
+            {
+                item.Product.ReservedQuantity += item.Quantity;
+                await _unitOfWork.Products.UpdateAsync(item.Product, ct);
+
+                var reservation = new StockReservation
+                {
+                    ProductId = item.ProductId,
+                    UserId = userId,
+                    Quantity = item.Quantity,
+                    StripeSessionId = stripeSession.SessionId,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(30),
+                    IsReleased = false
+                };
+
+                await _unitOfWork.StockReservations.AddAsync(reservation, ct);
+            }
+
+            cart.LastActivityAt = DateTime.UtcNow;
+            await _unitOfWork.Carts.UpdateAsync(cart, ct);
+
+            return new CheckoutSessionResponseDto
+            {
+                OrderId = order.Id,
+                OrderNumber = order.OrderNumber,
+                SessionId = stripeSession.SessionId,
+                SessionUrl = stripeSession.SessionUrl
+            };
+        }, cancellationToken);
+    }
+
+    private static long ToStripeAmount(decimal amount)
+        => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Application/Common/Mappings/MappingProfile.cs
+================================================================================
+
+using AutoMapper;
+
+namespace EcommerceApp.Application.Common.Mappings;
+
+/// <summary>
+/// Base AutoMapper profile for the Application layer.
+///
+/// Contains only common type converters and mapping conventions.
+/// Entity-to-DTO mappings live in each feature's own Mappings/ folder
+/// (e.g. Features/Auth/Mappings/AuthMappingProfile.cs) and are discovered
+/// automatically by AddAutoMapper(Assembly.GetExecutingAssembly()) in
+/// DependencyInjection.cs.
+///
+/// DO NOT add feature-specific mappings here � keep this file thin.
+/// </summary>
+public class MappingProfile : Profile
+{
+    public MappingProfile()
+    {
+        // -- DateTime normalization ---------------------------------------------
+        // Always store and return UTC. If a DateTime without a Kind arrives,
+        // we treat it as UTC to prevent timezone confusion.
+
+        CreateMap<DateTime, DateTime>()
+            .ConvertUsing(d =>
+                d.Kind == DateTimeKind.Utc
+                    ? d
+                    : DateTime.SpecifyKind(d, DateTimeKind.Utc));
+
+        CreateMap<DateTime?, DateTime?>()
+            .ConvertUsing(d =>
+                d.HasValue
+                    ? d.Value.Kind == DateTimeKind.Utc
+                        ? d
+                        : DateTime.SpecifyKind(d.Value, DateTimeKind.Utc)
+                    : null);
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Application/DependencyInjection.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Behaviors;
+using FluentValidation;
+using MediatR;
+using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
+
+namespace EcommerceApp.Application;
+
+/// <summary>
+/// Registers all Application layer services into the DI container.
+/// Called once from Program.cs: services.AddApplication();
+/// </summary>
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(
+        this IServiceCollection services)
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+
+        // -- AutoMapper --------------------------------------------------------
+        // Scans this assembly for all classes that inherit from Profile.
+        // This picks up:
+        //   - Common/Mappings/MappingProfile.cs
+        //   - Features/Auth/Mappings/AuthMappingProfile.cs
+        //   - Features/Products/Mappings/ProductMappingProfile.cs
+        //   - ... all other feature mapping profiles added in later parts
+        services.AddAutoMapper(assembly);
+
+        // -- MediatR -----------------------------------------------------------
+        // Scans this assembly for all:
+        //   - IRequestHandler<TRequest, TResponse> (command + query handlers)
+        //   - INotificationHandler<TNotification>  (domain event handlers)
+        services.AddMediatR(cfg =>
+            cfg.RegisterServicesFromAssembly(assembly));
+
+        // -- Pipeline behaviors ------------------------------------------------
+        // Registered in outermost-first order:
+        //
+        // Request  ?  LoggingBehavior
+        //             ?  PerformanceBehavior
+        //                 ?  ValidationBehavior
+        //                     ?  Handler
+        //                 ?  ValidationBehavior
+        //             ?  PerformanceBehavior (records elapsed time)
+        //         ?  LoggingBehavior (logs success or failure)
+        // Response ?
+
+        services.AddTransient(
+            typeof(IPipelineBehavior<,>),
+            typeof(LoggingBehavior<,>));
+
+        services.AddTransient(
+            typeof(IPipelineBehavior<,>),
+            typeof(PerformanceBehavior<,>));
+
+        services.AddTransient(
+            typeof(IPipelineBehavior<,>),
+            typeof(ValidationBehavior<,>));
+
+        // -- FluentValidation --------------------------------------------------
+        // Scans this assembly for all IValidator<T> implementations.
+        // includeInternalTypes: true � picks up validators in nested classes
+        // and internal validators used as child validators.
+        services.AddValidatorsFromAssembly(
+            assembly,
+            includeInternalTypes: true);
+
+        return services;
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/AppDbContext.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using System.Reflection;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+public class AppDbContext : DbContext
+{
+    private readonly ICurrentUserService _currentUserService;
+
+    public AppDbContext(
+        DbContextOptions<AppDbContext> options,
+        ICurrentUserService currentUserService)
+        : base(options)
+    {
+        _currentUserService = currentUserService;
+    }
+
+    // -- DbSets ----------------------------------------------------------------
+    public DbSet<User> Users => Set<User>();
+    public DbSet<OtpStore> OtpStores => Set<OtpStore>();
+    public DbSet<TokenStore> TokenStores => Set<TokenStore>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<CartItem> CartItems => Set<CartItem>();
+    public DbSet<ElasticStore> ElasticStores => Set<ElasticStore>();
+    public DbSet<Cart> Carts => Set<Cart>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<Address> Addresses => Set<Address>();
+    public DbSet<Banner> Banners => Set<Banner>();
+    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
+    public DbSet<Wishlist> Wishlists => Set<Wishlist>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Scans this assembly and applies every IEntityTypeConfiguration<T> class.
+        // Each configuration is responsible for its own query filter,
+        // column types, indexes, and FK relationships.
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        base.OnModelCreating(modelBuilder);
+    }
+
+    // -- Audit field auto-population -------------------------------------------
+    public override async Task<int> SaveChangesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+        var userId = _currentUserService.UserId;
+
+        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.Entity.CreatedAt = now;
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.CreatedBy = userId;
+                    entry.Entity.UpdatedBy = userId;
+                    entry.Entity.IsDeleted = false;
+                    break;
+
+                case EntityState.Modified:
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.UpdatedBy = userId;
+                    // Never allow overwriting the original author / timestamp
+                    entry.Property(e => e.CreatedAt).IsModified = false;
+                    entry.Property(e => e.CreatedBy).IsModified = false;
+                    break;
+            }
+        }
+
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/Configurations/AddressConfiguration.cs
+================================================================================
+
+using EcommerceApp.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace EcommerceApp.Infrastructure.Persistence.Configurations;
+
+public class AddressConfiguration : IEntityTypeConfiguration<Address>
+{
+    public void Configure(EntityTypeBuilder<Address> builder)
+    {
+        builder.ToTable("Addresses");
+
+        builder.HasKey(a => a.Id);
+
+        // -- Properties --------------------------------------------------------
+        builder.Property(a => a.FullName)
+            .IsRequired()
+            .HasMaxLength(200);
+
+        builder.Property(a => a.PhoneNumber)
+            .IsRequired()
+            .HasMaxLength(20);
+
+        builder.Property(a => a.AddressLine1)
+            .IsRequired()
+            .HasMaxLength(200);
+
+        builder.Property(a => a.AddressLine2)
+            .HasMaxLength(200);
+
+        builder.Property(a => a.City)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(a => a.State)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(a => a.PostalCode)
+            .IsRequired()
+            .HasMaxLength(20);
+
+        builder.Property(a => a.Country)
+            .IsRequired()
+            .HasMaxLength(100);
+
+        builder.Property(a => a.AddressType)
+            .IsRequired()
+            .HasMaxLength(20)
+            .HasDefaultValue("Home");
+
+        builder.Property(a => a.CreatedAt).IsRequired();
+        builder.Property(a => a.UpdatedAt).IsRequired();
+
+        // -- Indexes -----------------------------------------------------------
+        builder.HasIndex(a => a.UserId)
+            .HasDatabaseName("IX_Addresses_UserId");
+
+        // Default address lookup � used in checkout pre-population
+        builder.HasIndex(a => new { a.UserId, a.IsDefault })
+            .HasDatabaseName("IX_Addresses_UserId_IsDefault");
+
+        // -- Soft-delete query filter ------------------------------------------
+        builder.HasQueryFilter(a => !a.IsDeleted);
+
+        // -- Relationships -----------------------------------------------------
+        builder.HasOne(a => a.User)
+            .WithMany(u => u.Addresses)
+            .HasForeignKey(a => a.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/DependencyInjection.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure.Auth;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Interfaces;
+using EcommerceApp.Infrastructure.BackgroundServices;
+using EcommerceApp.Infrastructure.Search;
+using Microsoft.Extensions.Options;
+using Nest;
+using EcommerceApp.Infrastructure.Payments;
+
+namespace EcommerceApp.Infrastructure;
+
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services
+            .AddDatabase(configuration)
+            .AddAuthServices(configuration)
+            .AddRepositories()
+            .AddNotifications(configuration)
+            .AddSearch(configuration)
+            .AddPayments(configuration);
+
+        return services;
+    }
+
+
+    //Payments
+    private static IServiceCollection AddPayments(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        services.Configure<StripeSettings>(
+            configuration.GetSection(StripeSettings.SectionName));
+
+        services.AddScoped<IStripePaymentService, StripePaymentService>();
+
+        services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
+
+        return services;
+    }
+
+    // -- Search ----------------------------------------------------------------
+
+    private static IServiceCollection AddSearch(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind SearchSettings section
+        services.Configure<SearchSettings>(
+            configuration.GetSection(SearchSettings.SectionName));
+
+        var provider = configuration
+            .GetSection(SearchSettings.SectionName)["Provider"] ?? "Sql";
+
+        //Console.WriteLine($"[Search] Provider from config = '{provider}'");
+
+        if (provider.Equals("Elasticsearch", StringComparison.OrdinalIgnoreCase))
+        {
+            // -- Elasticsearch -----------------------------------------------------
+            //Console.WriteLine("[Search] Registered ElasticsearchSearchService");
+            services.AddSingleton<IElasticClient>(sp =>
+            {
+                var settings = sp.GetRequiredService<IOptions<SearchSettings>>().Value;
+
+                var connectionSettings = new ConnectionSettings(new Uri(settings.Uri))
+                    .DefaultIndex(settings.IndexName)
+                    .EnableDebugMode()
+                    .PrettyJson();
+
+                // Add credentials only when configured (production)
+                if (!string.IsNullOrEmpty(settings.Username) &&
+                    !string.IsNullOrEmpty(settings.Password))
+                {
+                    connectionSettings.BasicAuthentication(
+                        settings.Username, settings.Password);
+                }
+
+                return new ElasticClient(connectionSettings);
+            });
+
+            services.AddScoped<ElasticsearchSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<ElasticsearchSearchService>());
+        }
+        else
+        {
+            //Console.WriteLine("[Search] Registered SqlSearchService");
+            // -- SQL fallback ------------------------------------------------------
+            services.AddScoped<SqlSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<SqlSearchService>());
+        }
+
+        // Background sync service � runs regardless of provider
+        // (SQL provider's SyncAllAsync is a no-op, so no wasted work)
+        services.AddHostedService<ProductSearchSyncService>();
+
+        return services;
+    }
+
+    private static IServiceCollection AddNotifications(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        // Bind "Notifications" section to NotificationSettings
+        services.Configure<NotificationSettings>(
+            configuration.GetSection(NotificationSettings.SectionName));
+
+        // Dev senders � log to console instead of calling real APIs.
+        // In Part 11/12 these are swapped for SendGrid and Twilio
+        // by checking IHostEnvironment.IsProduction() or a feature flag.
+        services.AddTransient<IEmailSender, DevEmailSender>();
+        services.AddTransient<ISmsSender, DevSmsSender>();
+
+        return services;
+    }
+
+    // -- Database --------------------------------------------------------------
+
+    private static IServiceCollection AddDatabase(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<AppDbContext>((sp, options) =>
+        {
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sqlOptions =>
+                {
+                    // Retry on transient SQL Server failures (e.g. brief network blips)
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(30),
+                        errorNumbersToAdd: null);
+
+                    sqlOptions.MigrationsAssembly(
+                        typeof(AppDbContext).Assembly.FullName);
+                });
+        });
+
+        return services;
+    }
+
+    // -- Auth services ---------------------------------------------------------
+
+    private static IServiceCollection AddAuthServices(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind "Jwt" section to JwtSettings
+        services.Configure<JwtSettings>(
+            configuration.GetSection(JwtSettings.SectionName));
+
+        // Singleton: stateless � all fields are readonly after construction.
+        // Safe to share across requests.
+        services.AddSingleton<ITokenService, JwtTokenService>();
+
+        // Singleton: stateless (only uses RandomNumberGenerator and BCrypt)
+        services.AddSingleton<IOtpService, OtpService>();
+
+        // Singleton: stateless (only uses BCrypt and Regex)
+        services.AddSingleton<IPasswordService, PasswordService>();
+
+        // Scoped: wraps ITokenStoreRepository and IUnitOfWork which are both scoped
+        services.AddScoped<SessionService>();
+
+        return services;
+    }
+
+    // -- Repositories ----------------------------------------------------------
+
+    private static IServiceCollection AddRepositories(
+        this IServiceCollection services)
+    {
+        // Unit of Work � scoped to the HTTP request
+        services.AddScoped<IUnitOfWork, Persistence.UnitOfWork>();
+
+        // Auth-specific repos � injected directly into handlers (not via UoW)
+        services.AddScoped<ITokenStoreRepository, TokenStoreRepository>();
+        services.AddScoped<IOtpStoreRepository, OtpStoreRepository>();
+
+        // Search repo � injected directly into search service and sync job
+        services.AddScoped<ISearchRepository, SearchRepository>();
+
+        services.AddScoped<IProductRepository, ProductRepository>();
+
+        // -- ADD this line inside the existing AddRepositories() method ----------------
+        services.AddScoped<IBannerRepository, BannerRepository>();
+
+        services.AddScoped<IRateLimitRepository, RateLimitRepository>();
+        // NOTE: The remaining feature repositories are registered automatically
+        // through IUnitOfWork lazy initialization (Part 5 UnitOfWork.cs).
+        // Individual repos are only registered here when a handler injects
+        // them DIRECTLY instead of going through IUnitOfWork.
+
+        return services;
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/PaymentsController.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Features.Payments.Commands;
+using EcommerceApp.Application.Features.Payments.DTOs;
+using EcommerceApp.Application.Features.Payments.Queries;
+using EcommerceApp.Infrastructure.Payments;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Stripe;
+using Stripe.Checkout;
+using System.Text;
+
+namespace EcommerceApp.API.Controllers.v1;
+
+[ApiController]
+[Route("api/v1/payments")]
+public class PaymentsController : ControllerBase
+{
+    private readonly ISender _sender;
+    private readonly StripeSettings _stripeSettings;
+    private readonly ILogger<PaymentsController> _logger;
+
+    public PaymentsController(
+        ISender sender,
+        IOptions<StripeSettings> stripeOptions,
+        ILogger<PaymentsController> logger)
+    {
+        _sender = sender;
+        _stripeSettings = stripeOptions.Value;
+        _logger = logger;
+    }
+
+    [HttpPost("create-checkout-session")]
+    [Authorize]
+    [ProducesResponseType(typeof(CheckoutSessionResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<CheckoutSessionResponseDto>> CreateCheckoutSession(
+        [FromBody] CreateCheckoutSessionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _sender.Send(
+            new CreateCheckoutSessionCommand(request.AddressId),
+            cancellationToken);
+
+        return Ok(result);
+    }
+
+    [HttpGet("session/{sessionId}")]
+    [Authorize]
+    [ProducesResponseType(typeof(CheckoutSessionStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CheckoutSessionStatusDto>> GetSessionStatus(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _sender.Send(
+            new GetCheckoutSessionStatusQuery(sessionId),
+            cancellationToken);
+
+        return Ok(result);
+    }
+
+    [HttpPost("webhook")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Webhook(CancellationToken cancellationToken)
+    {
+        var json = await new StreamReader(HttpContext.Request.Body, Encoding.UTF8)
+            .ReadToEndAsync(cancellationToken);
+
+        var signature = Request.Headers["Stripe-Signature"];
+
+        Event stripeEvent;
+        try
+        {
+            stripeEvent = EventUtility.ConstructEvent(
+                json,
+                signature,
+                _stripeSettings.WebhookSecret);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Invalid Stripe webhook signature.");
+            return BadRequest();
+        }
+
+        switch (stripeEvent.Type)
+        {
+            case "checkout.session.completed":
+                {
+                    var session = stripeEvent.Data.Object as Session;
+                    if (session != null)
+                    {
+                        await _sender.Send(
+                            new MarkCheckoutSessionCompletedCommand(
+                                session.Id,
+                                session.PaymentIntentId),
+                            cancellationToken);
+                    }
+                    break;
+                }
+
+            case "payment_intent.payment_failed":
+                {
+                    var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+                    if (paymentIntent != null &&
+                        paymentIntent.Metadata.TryGetValue("orderId", out var orderIdRaw) &&
+                        Guid.TryParse(orderIdRaw, out var orderId))
+                    {
+                        await _sender.Send(
+                            new MarkPaymentFailedCommand(
+                                orderId,
+                                paymentIntent.Id,
+                                paymentIntent.LastPaymentError?.Message),
+                            cancellationToken);
+                    }
+                    break;
+                }
+
+            case "payment_intent.succeeded":
+                {
+                    var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+                    if (paymentIntent != null)
+                    {
+                        _logger.LogInformation(
+                            "Stripe payment_intent.succeeded received. PaymentIntentId={PaymentIntentId}",
+                            paymentIntent.Id);
+                    }
+                    break;
+                }
+
+            default:
+                _logger.LogInformation("Unhandled Stripe webhook event type: {EventType}", stripeEvent.Type);
+                break;
+        }
+
+        return Ok(new { received = true });
+    }
+
+    public class CreateCheckoutSessionRequest
+    {
+        public Guid? AddressId { get; set; }
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.API/Program.cs
+================================================================================
+
+using EcommerceApp.API.Filters;
+using EcommerceApp.API.Middleware;
+using EcommerceApp.API.Services;
+using EcommerceApp.Application;
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Seeders;
+using EcommerceApp.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Stripe;
+using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"]
+    ?? throw new InvalidOperationException("Stripe:SecretKey is not configured.");
+
+// -- Application layer -----------------------------------------------------
+builder.Services.AddApplication();
+
+// -- Infrastructure layer --------------------------------------------------
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// -- HttpContext / CurrentUser ---------------------------------------------
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+
+// -- JWT Authentication -----------------------------------------------------
+var jwtSecret = builder.Configuration["Jwt:Secret"]
+    ?? throw new InvalidOperationException("Jwt:Secret is not configured.");
+
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                                           Encoding.UTF8.GetBytes(jwtSecret)),
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        // Return JSON 401 instead of redirect � API clients expect JSON
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = ctx =>
+            {
+                ctx.HandleResponse();
+                ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":401,"message":"Unauthorized"}""");
+            },
+            OnForbidden = ctx =>
+            {
+                ctx.Response.StatusCode = 403;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":403,"message":"Forbidden"}""");
+            }
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// -- Controllers with ValidateModelFilter ----------------------------------
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<ValidateModelFilter>();
+});
+
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IRateLimitService, RateLimitService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Writes a consistent JSON body when the in-memory limiter rejects a request
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.ContentType = "application/json";
+
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            ctx.HttpContext.Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString();
+
+        await ctx.HttpContext.Response.WriteAsync(
+            """{"statusCode":429,"message":"Too many requests. Please slow down."}""",
+            ct);
+    };
+
+    // -- "products" policy: 60 req / min per IP --------------------------------
+    options.AddPolicy("products", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "search" policy: 30 req / min per IP ---------------------------------
+    options.AddPolicy("search", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "general" policy: 100 req / min per IP --------------------------------
+    // Applied to cart, wishlist, orders, banners
+    options.AddPolicy("general", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+});
+
+// -- Swagger with JWT bearer ------------------------------------------------
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "EcommerceApp API",
+        Version = "v1"
+    });
+
+    // JWT bearer definition � enables the Authorize button in Swagger UI
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. " +
+                       "Enter your token below (without the 'Bearer ' prefix).",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    // Apply globally � every endpoint shows the lock icon in Swagger UI
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id   = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+
+//frontend cors
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:5173",   // Vite dev server
+                "http://localhost:3000"    // fallback / production preview
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
+// -- Build ------------------------------------------------------------------
+var app = builder.Build();
+
+// -- Middleware pipeline (order matters) ------------------------------------
+
+// 1. Correlation ID first � every subsequent log entry gets the ID
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// 2. Global exception handler � catches anything thrown below this point
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "EcommerceApp v1");
+        c.DisplayRequestDuration();
+    });
+}
+
+app.UseCors("FrontendPolicy");
+
+//app.UseHttpsRedirection();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
+// 3. Authentication � parses and validates the JWT
+app.UseAuthentication();
+
+// 4. Session validation � confirms session is not revoked in DB
+app.UseMiddleware<SessionValidationMiddleware>();
+
+// 5. Authorization � enforces [Authorize] attributes
+app.UseAuthorization();
+
+app.UseRateLimiter();
+
+app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<AppDbContext>();
+        var logger = services.GetRequiredService<ILogger<Program>>();
+
+        // Apply any pending EF migrations automatically
+        await context.Database.MigrateAsync();
+
+        // Seed admin user, banners, and sample products (idempotent)
+        await DbSeeder.SeedAsync(context, logger);
+
+        logger.LogInformation("Database migration and seeding completed.");
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred during database migration or seeding.");
+        throw;
+    }
+}
+
+app.Run();
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Migrations/20260310100237_AddWishlistApiSupport.cs
+================================================================================
+
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace EcommerceApp.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddWishlistApiSupport : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_Wishlists_UserId_ProductId",
+                table: "Wishlists");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Wishlists_UserId_ProductId",
+                table: "Wishlists",
+                columns: new[] { "UserId", "ProductId" },
+                unique: true,
+                filter: "[IsDeleted] = 0");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_Wishlists_UserId_ProductId",
+                table: "Wishlists");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Wishlists_UserId_ProductId",
+                table: "Wishlists",
+                columns: new[] { "UserId", "ProductId" },
+                unique: true);
+        }
+    }
 }
 
 

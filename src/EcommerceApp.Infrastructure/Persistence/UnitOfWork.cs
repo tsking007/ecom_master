@@ -26,6 +26,7 @@ public class UnitOfWork : IUnitOfWork
     private INotificationRepository? _notifications;
     private IRateLimitRepository? _rateLimits;
     private IStockReservationRepository? _stockReservations;
+    private IAddressRepository? _addresses;
 
     public UnitOfWork(AppDbContext context)
     {
@@ -60,6 +61,9 @@ public class UnitOfWork : IUnitOfWork
 
     public IStockReservationRepository StockReservations =>
         _stockReservations ??= new StockReservationRepository(_context);
+
+    public IAddressRepository Addresses =>
+    _addresses ??= new AddressRepository(_context);
 
     // ── Persistence ───────────────────────────────────────────────────────────
 
