@@ -1,0 +1,213 @@
+/* ── Auth Wrapper ─────────────────────────────────────────────────────────── */
+.auth-wrapper {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+}
+
+/* ── Brand ────────────────────────────────────────────────────────────────── */
+.auth-brand-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.auth-brand-icon {
+  font-size: 1.8rem;
+}
+
+.auth-brand-name {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+/* ── Card ─────────────────────────────────────────────────────────────────── */
+.auth-card {
+  border-radius: 16px !important;
+  background: #ffffff;
+}
+
+/* ── Title & Subtitle ─────────────────────────────────────────────────────── */
+.auth-title {
+  font-size: 1.5rem;
+  color: #1a1a2e;
+}
+
+.auth-subtitle {
+  font-size: 0.875rem;
+}
+
+/* ── Form Controls ────────────────────────────────────────────────────────── */
+.auth-form .form-control {
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  font-size: 0.9rem;
+  border: 1.5px solid #dee2e6;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.auth-form .form-control:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+.auth-form .form-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #495057;
+  margin-bottom: 0.35rem;
+}
+
+.auth-form .invalid-feedback {
+  font-size: 0.78rem;
+}
+
+/* ── Password toggle ──────────────────────────────────────────────────────── */
+.password-input-wrapper {
+  position: relative;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: #6c757d;
+  font-size: 1rem;
+  line-height: 1;
+  z-index: 5;
+}
+
+.password-toggle-btn:hover {
+  color: #667eea;
+}
+
+/* ── Submit Button ────────────────────────────────────────────────────────── */
+.auth-submit-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 8px;
+  padding: 0.7rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: opacity 0.2s, transform 0.1s;
+  width: 100%;
+}
+
+.auth-submit-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+}
+
+.auth-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* ── OTP Input ────────────────────────────────────────────────────────────── */
+.otp-input-group {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.otp-single-input {
+  width: 48px !important;
+  height: 52px;
+  text-align: center;
+  font-size: 1.3rem;
+  font-weight: 700;
+  border-radius: 10px !important;
+  border: 2px solid #dee2e6 !important;
+  padding: 0 !important;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.otp-single-input:focus {
+  border-color: #667eea !important;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2) !important;
+}
+
+.otp-single-input.is-invalid {
+  border-color: #dc3545 !important;
+}
+
+/* ── Divider ──────────────────────────────────────────────────────────────── */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0;
+  color: #adb5bd;
+  font-size: 0.8rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #dee2e6;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+.auth-footer-text {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.875rem;
+}
+
+.auth-footer-link {
+  color: #ffffff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.auth-footer-link:hover {
+  color: #f0e6ff;
+}
+
+/* ── Alert ────────────────────────────────────────────────────────────────── */
+.auth-alert {
+  border-radius: 8px;
+  font-size: 0.875rem;
+  padding: 0.65rem 1rem;
+}
+
+/* ── Success Icon ─────────────────────────────────────────────────────────── */
+.auth-success-icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+/* ── Resend countdown ─────────────────────────────────────────────────────── */
+.resend-timer {
+  font-size: 0.82rem;
+  color: #6c757d;
+}
+
+.resend-link {
+  font-size: 0.82rem;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  color: #667eea;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.resend-link:hover {
+  color: #764ba2;
+}

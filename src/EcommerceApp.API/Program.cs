@@ -190,6 +190,23 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+
+//frontend cors
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:5173",   // Vite dev server
+                "http://localhost:3000"    // fallback / production preview
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
 // ── Build ──────────────────────────────────────────────────────────────────
 var app = builder.Build();
 
@@ -211,7 +228,14 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.UseHttpsRedirection();
+app.UseCors("FrontendPolicy");
+
+//app.UseHttpsRedirection();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 // 3. Authentication — parses and validates the JWT
 app.UseAuthentication();
