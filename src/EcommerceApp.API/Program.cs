@@ -6,14 +6,17 @@ using EcommerceApp.Application.Common;
 using EcommerceApp.Domain.Interfaces;
 using EcommerceApp.Infrastructure;
 using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Seeders;
 using EcommerceApp.Infrastructure.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Stripe;
 using System.Text;
-using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -222,5 +225,29 @@ app.UseAuthorization();
 app.UseRateLimiter();
 
 app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<AppDbContext>();
+        var logger = services.GetRequiredService<ILogger<Program>>();
+
+        // Apply any pending EF migrations automatically
+        await context.Database.MigrateAsync();
+
+        // Seed admin user, banners, and sample products (idempotent)
+        await DbSeeder.SeedAsync(context, logger);
+
+        logger.LogInformation("Database migration and seeding completed.");
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred during database migration or seeding.");
+        throw;
+    }
+}
 
 app.Run();

@@ -1,0 +1,2107 @@
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Product.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Product : BaseEntity
+{
+    public string Name { get; set; } = string.Empty;
+
+    // URL-friendly unique identifier e.g. "apple-iphone-15-pro-128gb"
+    public string Slug { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+
+    // Total physical stock in warehouse
+    public int StockQuantity { get; set; } = 0;
+
+    // Units currently locked by pending Stripe checkout sessions
+    public int ReservedQuantity { get; set; } = 0;
+
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? Brand { get; set; }
+
+    // Stored as JSON array in the database column
+    public List<string> ImageUrls { get; set; } = new();
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+
+    public double AverageRating { get; set; } = 0;
+    public int ReviewCount { get; set; } = 0;
+    public int SoldCount { get; set; } = 0;
+    public bool IsActive { get; set; } = true;
+    public bool IsFeatured { get; set; } = false;
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+
+    // -- Computed --------------------------------------------------------------
+
+    // The price customers actually pay
+    public decimal EffectivePrice => DiscountedPrice ?? Price;
+
+    // % discount shown on the UI (null if no discount)
+    public decimal? DiscountPercentage => DiscountedPrice.HasValue && Price > 0
+        ? Math.Round((1 - DiscountedPrice.Value / Price) * 100, 0)
+        : null;
+
+    // How many units can still be added to cart
+    public int AvailableStock => Math.Max(0, StockQuantity - ReservedQuantity);
+
+    // -- Navigation ------------------------------------------------------------
+    public ICollection<CartItem> CartItems { get; set; }
+        = new List<CartItem>();
+    public ICollection<OrderItem> OrderItems { get; set; }
+        = new List<OrderItem>();
+    public ICollection<ProductReview> Reviews { get; set; }
+        = new List<ProductReview>();
+    public ICollection<Wishlist> WishlistItems { get; set; }
+        = new List<Wishlist>();
+    public ICollection<StockReservation> StockReservations { get; set; }
+        = new List<StockReservation>();
+    public ElasticStore? ElasticStoreEntry { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Order.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Enums;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Order : BaseEntity
+{
+    public Guid UserId { get; set; }
+
+    // Human-readable order reference e.g. "ORD-20240115-00034"
+    public string OrderNumber { get; set; } = string.Empty;
+
+    // -- Financials ------------------------------------------------------------
+    public decimal SubTotal { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
+    public decimal ShippingAmount { get; set; } = 0;
+    public decimal TaxAmount { get; set; } = 0;
+    public decimal TotalAmount { get; set; }
+
+    // -- Status ----------------------------------------------------------------
+    public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
+    public TrackingStatus TrackingStatus { get; set; } = TrackingStatus.Placed;
+
+    // -- Stripe ----------------------------------------------------------------
+    public string? StripeSessionId { get; set; }
+    public string? StripePaymentIntentId { get; set; }
+
+    // -- Optional fields -------------------------------------------------------
+    public string? CouponCode { get; set; }
+
+    // JSON-serialized snapshot of the Address at time of order placement.
+    // Stored as a plain JSON string so it survives address deletion/edits.
+    public string ShippingAddressSnapshot { get; set; } = string.Empty;
+
+    public string? Notes { get; set; }
+    public string? TrackingNumber { get; set; }
+    public DateTime? EstimatedDeliveryDate { get; set; }
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? ReturnRequestedAt { get; set; }
+    public string? ReturnReason { get; set; }
+
+    // -- Navigation ------------------------------------------------------------
+    public User User { get; set; } = null!;
+    public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/OrderItem.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class OrderItem : BaseEntity
+{
+    public Guid OrderId { get; set; }
+
+    // Nullable — the product record may be soft-deleted after the order was placed.
+    // The snapshot fields below preserve all the data we need regardless.
+    public Guid? ProductId { get; set; }
+
+    // -- Snapshots (captured at checkout, immutable after that) ----------------
+    public string ProductName { get; set; } = string.Empty;
+    public string? ProductImageUrl { get; set; }
+    public string? ProductSlug { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal? DiscountedUnitPrice { get; set; }
+
+    // -- Quantities & totals ---------------------------------------------------
+    public int Quantity { get; set; }
+    public decimal TotalPrice { get; set; }
+
+    // -- Navigation ------------------------------------------------------------
+    public Order Order { get; set; } = null!;
+    public Product? Product { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Interfaces/IProductRepository.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+
+namespace EcommerceApp.Domain.Interfaces;
+
+public interface IProductRepository : IRepository<Product>
+{
+    Task<Product?> GetBySlugAsync(
+        string slug,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads product with its approved reviews for the detail page.</summary>
+    Task<Product?> GetWithReviewsAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Full catalog query — every catalog filter, sort, and pagination param.
+    /// Null parameters are ignored (treated as "no filter").
+    /// </summary>
+    Task<PagedResult<Product>> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        string? category,
+        string? subCategory,
+        decimal? minPrice,
+        decimal? maxPrice,
+        double? minRating,
+        string? brand,
+        string? sortBy,
+        bool sortDescending,
+        bool? isActive,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Product>> GetBestsellersAsync(
+        int count,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Product>> GetFeaturedAsync(
+        int count,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<string>> GetDistinctCategoriesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns each category paired with how many active products it has.</summary>
+    Task<IReadOnlyList<(string Category, int Count)>> GetCategoriesWithCountAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recalculates and persists AverageRating and ReviewCount
+    /// from the ProductReviews table for the given product.
+    /// Called after every review create / delete.
+    /// </summary>
+    Task UpdateAverageRatingAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> SlugExistsAsync(
+        string slug,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks if the slug is used by any product OTHER than excludeProductId.
+    /// Used during product update to allow keeping the same slug.
+    /// </summary>
+    Task<bool> SlugExistsForOtherProductAsync(
+        string slug,
+        Guid excludeProductId,
+        CancellationToken cancellationToken = default);
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Interfaces/IOrderRepository.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Enums;
+
+namespace EcommerceApp.Domain.Interfaces;
+
+public interface IOrderRepository : IRepository<Order>
+{
+    Task<Order?> GetByOrderNumberAsync(
+        string orderNumber,
+        CancellationToken cancellationToken = default);
+
+    Task<Order?> GetByStripeSessionIdAsync(
+        string stripeSessionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads the order with all OrderItems for detail / invoice views.</summary>
+    Task<Order?> GetWithItemsAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Customer-facing order history — paginated, optionally filtered by status.</summary>
+    Task<PagedResult<Order>> GetByUserIdPagedAsync(
+        Guid userId,
+        int pageNumber,
+        int pageSize,
+        TrackingStatus? status,
+        CancellationToken cancellationToken = default);
+
+    Task<Order?> GetByIdForUserAsync(
+        Guid orderId,
+        Guid userId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Admin order list — multi-field filter: tracking status, payment status,
+    /// date range, and free-text search on order number / customer email.
+    /// </summary>
+    Task<PagedResult<Order>> GetAdminPagedAsync(
+        int pageNumber,
+        int pageSize,
+        TrackingStatus? trackingStatus,
+        PaymentStatus? paymentStatus,
+        DateTime? from,
+        DateTime? to,
+        string? searchTerm,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Generates the next human-readable order number in the format ORD-YYYYMMDD-NNNNN.
+    /// Uses a DB-level atomic counter or MAX query to avoid duplicates.
+    /// </summary>
+    Task<string> GenerateOrderNumberAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns aggregated revenue and status counts for the admin dashboard.</summary>
+    Task<OrderStats> GetStatsAsync(
+        DateTime? from,
+        DateTime? to,
+        CancellationToken cancellationToken = default);
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Common/BaseEntity.cs
+================================================================================
+
+namespace EcommerceApp.Domain.Common;
+
+public abstract class BaseEntity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public Guid? CreatedBy { get; set; }
+    public Guid? UpdatedBy { get; set; }
+    public bool IsDeleted { get; set; } = false;
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Common/PagedResult.cs
+================================================================================
+
+namespace EcommerceApp.Domain.Common;
+
+public class PagedResult<T>
+{
+    public IReadOnlyList<T> Items { get; }
+    public int TotalCount { get; }
+    public int PageNumber { get; }
+    public int PageSize { get; }
+    public int TotalPages => PageSize > 0
+        ? (int)Math.Ceiling(TotalCount / (double)PageSize)
+        : 0;
+    public bool HasNextPage => PageNumber < TotalPages;
+    public bool HasPreviousPage => PageNumber > 1;
+    public bool IsEmpty => !Items.Any();
+
+    public PagedResult(IReadOnlyList<T> items, int totalCount, int pageNumber, int pageSize)
+    {
+        Items = items;
+        TotalCount = totalCount;
+        PageNumber = pageNumber;
+        PageSize = pageSize;
+    }
+
+    // -- Factory methods -------------------------------------------------------
+
+    public static PagedResult<T> Create(
+        IReadOnlyList<T> items,
+        int totalCount,
+        int pageNumber,
+        int pageSize)
+        => new(items, totalCount, pageNumber, pageSize);
+
+    public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 10)
+        => new(new List<T>(), 0, pageNumber, pageSize);
+
+    // -- Projection helper -----------------------------------------------------
+
+    public PagedResult<TOut> Map<TOut>(Func<T, TOut> mapper)
+        => new(Items.Select(mapper).ToList(), TotalCount, PageNumber, PageSize);
+
+    //public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 20)
+    //=> new(new List<T>(), 0, pageNumber, pageSize);
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Commands/CreateProductCommand.cs
+================================================================================
+
+using AutoMapper;
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Events;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Commands;
+
+// -- Command -------------------------------------------------------------------
+
+public record CreateProductCommand(
+    string Name,
+    string Description,
+    string? ShortDescription,
+    decimal Price,
+    decimal? DiscountedPrice,
+    int StockQuantity,
+    string Category,
+    string? SubCategory,
+    string? Brand,
+    List<string> ImageUrls,
+    string? VideoUrl,
+    List<string> Tags,
+    bool IsFeatured,
+    decimal? Weight,
+    string? Dimensions
+) : IRequest<ProductDto>;
+
+// -- Handler -------------------------------------------------------------------
+
+public class CreateProductCommandHandler
+    : IRequestHandler<CreateProductCommand, ProductDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IPublisher _publisher;
+    private readonly IMapper _mapper;
+
+    public CreateProductCommandHandler(
+        IUnitOfWork unitOfWork,
+        IPublisher publisher,
+        IMapper mapper)
+    {
+        _unitOfWork = unitOfWork;
+        _publisher = publisher;
+        _mapper = mapper;
+    }
+
+    public async Task<ProductDto> Handle(
+        CreateProductCommand command,
+        CancellationToken cancellationToken)
+    {
+        // -- 1. Validate discounted price --------------------------------------
+        if (command.DiscountedPrice.HasValue &&
+            command.DiscountedPrice.Value >= command.Price)
+            throw new ValidationException(
+                "DiscountedPrice",
+                "Discounted price must be less than the base price.");
+
+        // -- 2. Generate unique slug from product name --------------------------
+        var baseSlug = SlugHelper.GenerateSlug(command.Name);
+        var slug = baseSlug;
+        var suffix = 2;
+
+        while (await _unitOfWork.Products.SlugExistsAsync(slug, cancellationToken))
+            slug = SlugHelper.AppendSuffix(baseSlug, suffix++);
+
+        // -- 3. Create and persist ---------------------------------------------
+        var product = new Product
+        {
+            Name = command.Name.Trim(),
+            Slug = slug,
+            Description = command.Description.Trim(),
+            ShortDescription = command.ShortDescription?.Trim(),
+            Price = command.Price,
+            DiscountedPrice = command.DiscountedPrice,
+            StockQuantity = command.StockQuantity,
+            ReservedQuantity = 0,
+            Category = command.Category.Trim(),
+            SubCategory = command.SubCategory?.Trim(),
+            Brand = command.Brand?.Trim(),
+            ImageUrls = command.ImageUrls ?? new List<string>(),
+            VideoUrl = command.VideoUrl,
+            Tags = command.Tags ?? new List<string>(),
+            IsFeatured = command.IsFeatured,
+            IsActive = true,
+            Weight = command.Weight,
+            Dimensions = command.Dimensions,
+            AverageRating = 0,
+            ReviewCount = 0,
+            SoldCount = 0
+        };
+
+        await _unitOfWork.Products.AddAsync(product, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // -- 4. Publish domain event (consumed by search sync service, Part 15) -
+        await _publisher.Publish(new ProductCreatedNotification(
+            ProductId: product.Id,
+            Name: product.Name,
+            Slug: product.Slug,
+            Category: product.Category,
+            Price: product.EffectivePrice,
+            IsActive: product.IsActive),
+            cancellationToken);
+
+        return _mapper.Map<ProductDto>(product);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Commands/UpdateProductCommand.cs
+================================================================================
+
+using AutoMapper;
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Events;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Commands;
+
+// -- Command -------------------------------------------------------------------
+
+public record UpdateProductCommand(
+    Guid ProductId,
+    string Name,
+    string Description,
+    string? ShortDescription,
+    decimal Price,
+    decimal? DiscountedPrice,
+    int StockQuantity,
+    string Category,
+    string? SubCategory,
+    string? Brand,
+    List<string> ImageUrls,
+    string? VideoUrl,
+    List<string> Tags,
+    bool IsActive,
+    bool IsFeatured,
+    decimal? Weight,
+    string? Dimensions
+) : IRequest<ProductDto>;
+
+// -- Handler -------------------------------------------------------------------
+
+public class UpdateProductCommandHandler
+    : IRequestHandler<UpdateProductCommand, ProductDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IPublisher _publisher;
+    private readonly IMapper _mapper;
+
+    public UpdateProductCommandHandler(
+        IUnitOfWork unitOfWork,
+        IPublisher publisher,
+        IMapper mapper)
+    {
+        _unitOfWork = unitOfWork;
+        _publisher = publisher;
+        _mapper = mapper;
+    }
+
+    public async Task<ProductDto> Handle(
+        UpdateProductCommand command,
+        CancellationToken cancellationToken)
+    {
+        // -- 1. Load product ---------------------------------------------------
+        var product = await _unitOfWork.Products.GetByIdAsync(
+            command.ProductId, cancellationToken)
+            ?? throw new NotFoundException("Product", command.ProductId);
+
+        // -- 2. Validate discounted price --------------------------------------
+        if (command.DiscountedPrice.HasValue &&
+            command.DiscountedPrice.Value >= command.Price)
+            throw new ValidationException(
+                "DiscountedPrice",
+                "Discounted price must be less than the base price.");
+
+        // -- 3. Capture old price before update (for price-drop notification) --
+        var oldPrice = product.EffectivePrice;
+
+        // -- 4. Regenerate slug only if the name changed -----------------------
+        if (!string.Equals(product.Name, command.Name.Trim(),
+            StringComparison.OrdinalIgnoreCase))
+        {
+            var baseSlug = SlugHelper.GenerateSlug(command.Name);
+            var slug = baseSlug;
+            var suffix = 2;
+
+            while (await _unitOfWork.Products.SlugExistsForOtherProductAsync(
+                slug, product.Id, cancellationToken))
+                slug = SlugHelper.AppendSuffix(baseSlug, suffix++);
+
+            product.Slug = slug;
+        }
+
+        // -- 5. Apply updates --------------------------------------------------
+        product.Name = command.Name.Trim();
+        product.Description = command.Description.Trim();
+        product.ShortDescription = command.ShortDescription?.Trim();
+        product.Price = command.Price;
+        product.DiscountedPrice = command.DiscountedPrice;
+        product.StockQuantity = command.StockQuantity;
+        product.Category = command.Category.Trim();
+        product.SubCategory = command.SubCategory?.Trim();
+        product.Brand = command.Brand?.Trim();
+        product.ImageUrls = command.ImageUrls ?? new List<string>();
+        product.VideoUrl = command.VideoUrl;
+        product.Tags = command.Tags ?? new List<string>();
+        product.IsActive = command.IsActive;
+        product.IsFeatured = command.IsFeatured;
+        product.Weight = command.Weight;
+        product.Dimensions = command.Dimensions;
+
+        await _unitOfWork.Products.UpdateAsync(product, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // -- 6. Publish domain events ------------------------------------------
+        var newPrice = product.EffectivePrice;
+
+        await _publisher.Publish(new ProductUpdatedNotification(
+            ProductId: product.Id,
+            Name: product.Name,
+            Slug: product.Slug,
+            OldPrice: oldPrice,
+            NewPrice: newPrice,
+            IsActive: product.IsActive),
+            cancellationToken);
+
+        // Price dropped ? notify users who wishlisted or carted this product (Part 17)
+        if (newPrice < oldPrice)
+            await _publisher.Publish(new PriceDroppedNotification(
+                ProductId: product.Id,
+                ProductName: product.Name,
+                ProductSlug: product.Slug,
+                OldPrice: oldPrice,
+                NewPrice: newPrice),
+                cancellationToken);
+
+        return _mapper.Map<ProductDto>(product);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Commands/UpdateStockCommand.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Commands;
+
+// -- Command -------------------------------------------------------------------
+
+/// <summary>
+/// Sets the physical stock quantity for a product.
+/// Admin-only — called after a warehouse stock count or receiving goods.
+/// NewQuantity must cover the currently reserved units (locked by pending Stripe sessions).
+/// </summary>
+public record UpdateStockCommand(
+    Guid ProductId,
+    int NewQuantity) : IRequest;
+
+// -- Handler -------------------------------------------------------------------
+
+public class UpdateStockCommandHandler : IRequestHandler<UpdateStockCommand>
+{
+    private readonly IUnitOfWork _unitOfWork;
+
+    public UpdateStockCommandHandler(IUnitOfWork unitOfWork)
+    {
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task Handle(
+        UpdateStockCommand command,
+        CancellationToken cancellationToken)
+    {
+        var product = await _unitOfWork.Products.GetByIdAsync(
+            command.ProductId, cancellationToken)
+            ?? throw new NotFoundException("Product", command.ProductId);
+
+        // Prevent setting stock below the number of units currently reserved
+        // by pending Stripe checkout sessions.
+        if (command.NewQuantity < product.ReservedQuantity)
+            throw new ValidationException(
+                "NewQuantity",
+                $"Stock cannot be set lower than the currently reserved " +
+                $"quantity ({product.ReservedQuantity} units). " +
+                $"Wait for pending checkouts to complete or expire.");
+
+        product.StockQuantity = command.NewQuantity;
+
+        await _unitOfWork.Products.UpdateAsync(product, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Commands/DeleteProductCommand.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Domain.Events;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Commands;
+
+// -- Command -------------------------------------------------------------------
+
+/// <summary>
+/// Soft-deletes a product — sets IsDeleted = true.
+/// The EF global query filter then hides it from all future queries.
+/// Products are never hard-deleted because historical orders reference them.
+/// </summary>
+public record DeleteProductCommand(Guid ProductId) : IRequest;
+
+// -- Handler -------------------------------------------------------------------
+
+public class DeleteProductCommandHandler : IRequestHandler<DeleteProductCommand>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IPublisher _publisher;
+
+    public DeleteProductCommandHandler(IUnitOfWork unitOfWork, IPublisher publisher)
+    {
+        _unitOfWork = unitOfWork;
+        _publisher = publisher;
+    }
+
+    public async Task Handle(
+        DeleteProductCommand command,
+        CancellationToken cancellationToken)
+    {
+        var product = await _unitOfWork.Products.GetByIdAsync(
+            command.ProductId, cancellationToken)
+            ?? throw new NotFoundException("Product", command.ProductId);
+
+        // SoftDeleteAsync sets IsDeleted = true (Part 5 GenericRepository)
+        await _unitOfWork.Products.SoftDeleteAsync(product, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // Publish event so search sync removes it from Elasticsearch (Part 15)
+        await _publisher.Publish(new ProductDeletedNotification(
+            ProductId: product.Id,
+            Name: product.Name,
+            Slug: product.Slug),
+            cancellationToken);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/DTOs/ProductDto.cs
+================================================================================
+
+namespace EcommerceApp.Application.Features.Products.DTOs;
+
+/// <summary>
+/// Full product detail — returned by GetProductBySlugQuery.
+/// Used on the product detail page.
+/// </summary>
+public class ProductDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Slug { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public string? Brand { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public decimal EffectivePrice { get; set; }
+    public decimal? DiscountPercentage { get; set; }
+    public int StockQuantity { get; set; }
+    public int ReservedQuantity { get; set; }
+    public int AvailableStock { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsFeatured { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
+    public string? MainImageUrl { get; set; }
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+    public double AverageRating { get; set; }
+    public int ReviewCount { get; set; }
+    public int SoldCount { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Validators/CreateProductCommandValidator.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Validators;
+using EcommerceApp.Application.Features.Products.Commands;
+using FluentValidation;
+
+namespace EcommerceApp.Application.Features.Products.Validators;
+
+public class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
+{
+    public CreateProductCommandValidator()
+    {
+        RuleFor(x => x.Name)
+            .NotEmpty().WithMessage("Product name is required.")
+            .MaximumLength(300).WithMessage("Name must not exceed 300 characters.");
+
+        RuleFor(x => x.Description)
+            .NotEmpty().WithMessage("Description is required.")
+            .MaximumLength(5000).WithMessage("Description must not exceed 5000 characters.");
+
+        RuleFor(x => x.ShortDescription)
+            .MaximumLength(1000)
+            .When(x => x.ShortDescription is not null);
+
+        RuleFor(x => x.Price)
+            .ApplyPriceRules("Price");
+
+        // Discounted price: only validate when provided
+        When(x => x.DiscountedPrice.HasValue, () =>
+        {
+            RuleFor(x => x.DiscountedPrice!.Value)
+                .GreaterThan(0)
+                    .WithMessage("Discounted price must be greater than 0.")
+                .LessThan(x => x.Price)
+                    .WithMessage("Discounted price must be less than the base price.");
+        });
+
+        RuleFor(x => x.StockQuantity)
+            .ApplyStockQuantityRules();
+
+        RuleFor(x => x.Category)
+            .NotEmpty().WithMessage("Category is required.")
+            .MaximumLength(100).WithMessage("Category must not exceed 100 characters.");
+
+        RuleFor(x => x.SubCategory)
+            .MaximumLength(100)
+            .When(x => x.SubCategory is not null);
+
+        RuleFor(x => x.Brand)
+            .MaximumLength(100)
+            .When(x => x.Brand is not null);
+
+        RuleFor(x => x.ImageUrls)
+            .Must(urls => urls == null || urls.Count <= 10)
+                .WithMessage("A product can have at most 10 images.");
+
+        RuleFor(x => x.Tags)
+            .Must(tags => tags == null || tags.Count <= 20)
+                .WithMessage("A product can have at most 20 tags.");
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Validators/UpdateProductCommandValidator.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Validators;
+using EcommerceApp.Application.Features.Products.Commands;
+using FluentValidation;
+
+namespace EcommerceApp.Application.Features.Products.Validators;
+
+public class UpdateProductCommandValidator : AbstractValidator<UpdateProductCommand>
+{
+    public UpdateProductCommandValidator()
+    {
+        RuleFor(x => x.ProductId)
+            .ApplyGuidRules("Product ID");
+
+        RuleFor(x => x.Name)
+            .NotEmpty().WithMessage("Product name is required.")
+            .MaximumLength(300);
+
+        RuleFor(x => x.Description)
+            .NotEmpty().WithMessage("Description is required.")
+            .MaximumLength(5000);
+
+        RuleFor(x => x.ShortDescription)
+            .MaximumLength(1000)
+            .When(x => x.ShortDescription is not null);
+
+        RuleFor(x => x.Price)
+            .ApplyPriceRules("Price");
+
+        When(x => x.DiscountedPrice.HasValue, () =>
+        {
+            RuleFor(x => x.DiscountedPrice!.Value)
+                .GreaterThan(0)
+                    .WithMessage("Discounted price must be greater than 0.")
+                .LessThan(x => x.Price)
+                    .WithMessage("Discounted price must be less than the base price.");
+        });
+
+        RuleFor(x => x.StockQuantity)
+            .ApplyStockQuantityRules();
+
+        RuleFor(x => x.Category)
+            .NotEmpty().WithMessage("Category is required.")
+            .MaximumLength(100);
+
+        RuleFor(x => x.SubCategory)
+            .MaximumLength(100).When(x => x.SubCategory is not null);
+
+        RuleFor(x => x.Brand)
+            .MaximumLength(100).When(x => x.Brand is not null);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Products/Validators/UpdateStockCommandValidator.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Validators;
+using EcommerceApp.Application.Features.Products.Commands;
+using FluentValidation;
+
+namespace EcommerceApp.Application.Features.Products.Validators;
+
+public class UpdateStockCommandValidator : AbstractValidator<UpdateStockCommand>
+{
+    public UpdateStockCommandValidator()
+    {
+        RuleFor(x => x.ProductId)
+            .ApplyGuidRules("Product ID");
+
+        RuleFor(x => x.NewQuantity)
+            .ApplyStockQuantityRules();
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Orders/Queries/GetOrderDetailsQuery.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Features.Orders.DTOs;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Orders.Queries;
+
+public record GetOrderDetailsQuery(Guid OrderId) : IRequest<OrderDetailsDto>;
+
+public class GetOrderDetailsQueryHandler
+    : IRequestHandler<GetOrderDetailsQuery, OrderDetailsDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUserService;
+
+    public GetOrderDetailsQueryHandler(
+        IUnitOfWork unitOfWork,
+        ICurrentUserService currentUserService)
+    {
+        _unitOfWork = unitOfWork;
+        _currentUserService = currentUserService;
+    }
+
+    public async Task<OrderDetailsDto> Handle(
+        GetOrderDetailsQuery request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+            ?? throw new UnauthorizedException("User is not authenticated.");
+
+        var order = await _unitOfWork.Orders.GetByIdForUserAsync(
+            request.OrderId,
+            userId,
+            cancellationToken);
+
+        if (order == null)
+            throw new NotFoundException("Order", request.OrderId);
+
+        return new OrderDetailsDto
+        {
+            OrderId = order.Id,
+            OrderNumber = order.OrderNumber,
+            PaymentStatus = order.PaymentStatus.ToString(),
+            TrackingStatus = order.TrackingStatus.ToString(),
+            SubTotal = order.SubTotal,
+            DiscountAmount = order.DiscountAmount,
+            ShippingAmount = order.ShippingAmount,
+            TaxAmount = order.TaxAmount,
+            TotalAmount = order.TotalAmount,
+            EstimatedDeliveryDate = order.EstimatedDeliveryDate,
+            ShippingAddressSnapshot = order.ShippingAddressSnapshot,
+            CreatedAt = order.CreatedAt,
+            Items = order.Items
+                .Where(x => !x.IsDeleted)
+                .Select(x => new OrderItemDetailsDto
+                {
+                    ProductId = x.ProductId,
+                    ProductName = x.ProductName,
+                    ProductSlug = x.ProductSlug,
+                    ProductImageUrl = x.ProductImageUrl,
+                    UnitPrice = x.UnitPrice,
+                    DiscountedUnitPrice = x.DiscountedUnitPrice,
+                    Quantity = x.Quantity,
+                    TotalPrice = x.TotalPrice
+                })
+                .ToList()
+        };
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Orders/DTOs/OrderDetailsDto.cs
+================================================================================
+
+namespace EcommerceApp.Application.Features.Orders.DTOs;
+
+public class OrderDetailsDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string PaymentStatus { get; set; } = string.Empty;
+    public string TrackingStatus { get; set; } = string.Empty;
+    public decimal SubTotal { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal ShippingAmount { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public DateTime? EstimatedDeliveryDate { get; set; }
+    public string? ShippingAddressSnapshot { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public List<OrderItemDetailsDto> Items { get; set; } = new();
+}
+
+public class OrderItemDetailsDto
+{
+    public Guid? ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string? ProductSlug { get; set; }
+    public string? ProductImageUrl { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal? DiscountedUnitPrice { get; set; }
+    public int Quantity { get; set; }
+    public decimal TotalPrice { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Application/Common/ICurrentUserService.cs
+================================================================================
+
+namespace EcommerceApp.Application.Common;
+
+/// <summary>
+/// Abstracts the current authenticated user's identity.
+/// Implemented in the API layer using IHttpContextAccessor and JWT claims.
+/// A no-op stub is used by the EF Core design-time factory (migrations).
+/// </summary>
+public interface ICurrentUserService
+{
+    /// <summary>The authenticated user's ID. Null for anonymous requests.</summary>
+    Guid? UserId { get; }
+
+    /// <summary>True when the current request carries a valid JWT.</summary>
+    bool IsAuthenticated { get; }
+
+    /// <summary>The authenticated user's email claim.</summary>
+    string? Email { get; }
+
+    /// <summary>"Admin" or "Customer".</summary>
+    string? Role { get; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.API/Controllers/Admin/AdminProductsController.cs
+================================================================================
+
+//using EcommerceApp.API.Models.Requests.Products;
+//using EcommerceApp.Application.Features.Products.Commands;
+//using EcommerceApp.Application.Features.Products.DTOs;
+//using EcommerceApp.Application.Features.Products.Queries;
+//using EcommerceApp.Domain.Common;
+//using MediatR;
+//using Microsoft.AspNetCore.Authorization;
+//using Microsoft.AspNetCore.Mvc;
+
+//namespace EcommerceApp.API.Controllers.Admin;
+
+///// <summary>
+///// Admin product management — full CRUD + stock + active toggle.
+///// All endpoints require the "Admin" role.
+///// Unlike the public ProductsController, inactive products ARE visible here.
+///// </summary>
+//[ApiController]
+//[Route("api/admin/products")]
+//[Authorize(Roles = "Admin")]
+//public class AdminProductsController : ControllerBase
+//{
+//    private readonly ISender _sender;
+
+//    public AdminProductsController(ISender sender) => _sender = sender;
+
+//    // -- GET /api/admin/products -----------------------------------------------
+//    // Admin sees all products; optionally filter with ?isActive=true/false
+//    [HttpGet]
+//    [ProducesResponseType(typeof(PagedResult<ProductListDto>), StatusCodes.Status200OK)]
+//    public async Task<IActionResult> GetProducts(
+//        [FromQuery] GetProductsRequest req,
+//        CancellationToken ct)
+//    {
+//        var query = new GetProductsQuery(
+//            PageNumber: req.PageNumber,
+//            PageSize: req.PageSize,
+//            Category: req.Category,
+//            SubCategory: req.SubCategory,
+//            MinPrice: req.MinPrice,
+//            MaxPrice: req.MaxPrice,
+//            MinRating: req.MinRating,
+//            Brand: req.Brand,
+//            SortBy: req.SortBy,
+//            SortDescending: req.SortDescending,
+//            IsActive: req.IsActive);      // null = all, true = active only, false = inactive only
+
+//        return Ok(await _sender.Send(query, ct));
+//    }
+
+//    // -- GET /api/admin/products/{id} ------------------------------------------
+//    [HttpGet("{id:guid}")]
+//    [ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+//    [ProducesResponseType(StatusCodes.Status404NotFound)]
+//    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+//        => Ok(await _sender.Send(
+//            new GetProductBySlugQuery(Id: id, IgnoreActiveFilter: true), ct));
+
+//    // -- POST /api/admin/products ----------------------------------------------
+//    [HttpPost]
+//    [ProducesResponseType(typeof(ProductDto), StatusCodes.Status201Created)]
+//    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+//    public async Task<IActionResult> Create(
+//        [FromBody] CreateProductRequest req,
+//        CancellationToken ct)
+//    {
+//        var command = new CreateProductCommand(
+//            Name: req.Name,
+//            Description: req.Description,
+//            ShortDescription: req.ShortDescription,
+//            Price: req.Price,
+//            DiscountedPrice: req.DiscountedPrice,
+//            StockQuantity: req.StockQuantity,
+//            Category: req.Category,
+//            SubCategory: req.SubCategory,
+//            Brand: req.Brand,
+//            ImageUrls: req.ImageUrls,
+//            VideoUrl: req.VideoUrl,
+//            Tags: req.Tags,
+//            IsFeatured: req.IsFeatured,
+//            Weight: req.Weight,
+//            Dimensions: req.Dimensions);
+
+//        var result = await _sender.Send(command, ct);
+
+//        return CreatedAtAction(
+//            nameof(GetById),
+//            new { id = result.Id },
+//            result);
+//    }
+
+//    // -- PUT /api/admin/products/{id} ------------------------------------------
+//    [HttpPut("{id:guid}")]
+//    [ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+//    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+//    [ProducesResponseType(StatusCodes.Status404NotFound)]
+//    public async Task<IActionResult> Update(
+//        Guid id,
+//        [FromBody] UpdateProductRequest req,
+//        CancellationToken ct)
+//    {
+//        var command = new UpdateProductCommand(
+//            ProductId: id,
+//            Name: req.Name,
+//            Description: req.Description,
+//            ShortDescription: req.ShortDescription,
+//            Price: req.Price,
+//            DiscountedPrice: req.DiscountedPrice,
+//            StockQuantity: req.StockQuantity,
+//            Category: req.Category,
+//            SubCategory: req.SubCategory,
+//            Brand: req.Brand,
+//            ImageUrls: req.ImageUrls,
+//            VideoUrl: req.VideoUrl,
+//            Tags: req.Tags,
+//            IsActive: req.IsActive,
+//            IsFeatured: req.IsFeatured,
+//            Weight: req.Weight,
+//            Dimensions: req.Dimensions);
+
+//        return Ok(await _sender.Send(command, ct));
+//    }
+
+//    // -- DELETE /api/admin/products/{id} ---------------------------------------
+//    [HttpDelete("{id:guid}")]
+//    [ProducesResponseType(StatusCodes.Status204NoContent)]
+//    [ProducesResponseType(StatusCodes.Status404NotFound)]
+//    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+//    {
+//        await _sender.Send(new DeleteProductCommand(id), ct);
+//        return NoContent();
+//    }
+
+//    // -- PATCH /api/admin/products/{id}/stock ----------------------------------
+//    [HttpPatch("{id:guid}/stock")]
+//    [ProducesResponseType(StatusCodes.Status204NoContent)]
+//    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+//    [ProducesResponseType(StatusCodes.Status404NotFound)]
+//    public async Task<IActionResult> UpdateStock(
+//        Guid id,
+//        [FromBody] UpdateStockRequest req,
+//        CancellationToken ct)
+//    {
+//        await _sender.Send(new UpdateStockCommand(id, req.NewQuantity), ct);
+//        return NoContent();
+//    }
+
+//    // -- PATCH /api/admin/products/{id}/toggle-active -------------------------
+//    [HttpPatch("{id:guid}/toggle-active")]
+//    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+//    [ProducesResponseType(StatusCodes.Status404NotFound)]
+//    public async Task<IActionResult> ToggleActive(Guid id, CancellationToken ct)
+//    {
+//        var isActive = await _sender.Send(new ToggleActiveCommand(id), ct);
+//        return Ok(new { IsActive = isActive });
+//    }
+//}
+
+================================================================================
+FILE: src/EcommerceApp.API/Models/Requests/Products/CreateProductRequest.cs
+================================================================================
+
+namespace EcommerceApp.API.Models.Requests.Products;
+
+public class CreateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public int StockQuantity { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? Brand { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public bool IsFeatured { get; set; }
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.API/Models/Requests/Products/UpdateProductRequest.cs
+================================================================================
+
+namespace EcommerceApp.API.Models.Requests.Products;
+
+public class UpdateProductRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public int StockQuantity { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? Brand { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public bool IsActive { get; set; }
+    public bool IsFeatured { get; set; }
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.API/Models/Requests/Products/UpdateStockRequest.cs
+================================================================================
+
+namespace EcommerceApp.API.Models.Requests.Products;
+
+public class UpdateStockRequest
+{
+    public int NewQuantity { get; set; }
+}
+
+================================================================================
+FILE: src/EcommerceApp.API/Models/Requests/Products/GetProductsRequest.cs
+================================================================================
+
+namespace EcommerceApp.API.Models.Requests.Products;
+
+/// <summary>
+/// Bound from URL query string via [FromQuery].
+/// IsActive is used by AdminProductsController only.
+/// The public ProductsController always overrides it to true.
+/// </summary>
+public class GetProductsRequest
+{
+    public int PageNumber { get; set; } = 1;
+    public int PageSize { get; set; } = 20;
+    public string? Category { get; set; }
+    public string? SubCategory { get; set; }
+    public decimal? MinPrice { get; set; }
+    public decimal? MaxPrice { get; set; }
+    public double? MinRating { get; set; }
+    public string? Brand { get; set; }
+    public string? SortBy { get; set; }
+    public bool SortDescending { get; set; } = true;
+    public bool? IsActive { get; set; }   // admin only — public ignores this
+}
+
+================================================================================
+FILE: src/EcommerceApp.API/Program.cs
+================================================================================
+
+using EcommerceApp.API.Filters;
+using EcommerceApp.API.Middleware;
+using EcommerceApp.API.Services;
+using EcommerceApp.Application;
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Stripe;
+using System.Text;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"]
+    ?? throw new InvalidOperationException("Stripe:SecretKey is not configured.");
+
+// -- Application layer -----------------------------------------------------
+builder.Services.AddApplication();
+
+// -- Infrastructure layer --------------------------------------------------
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// -- HttpContext / CurrentUser ---------------------------------------------
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+
+// -- JWT Authentication -----------------------------------------------------
+var jwtSecret = builder.Configuration["Jwt:Secret"]
+    ?? throw new InvalidOperationException("Jwt:Secret is not configured.");
+
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                                           Encoding.UTF8.GetBytes(jwtSecret)),
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        // Return JSON 401 instead of redirect — API clients expect JSON
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = ctx =>
+            {
+                ctx.HandleResponse();
+                ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":401,"message":"Unauthorized"}""");
+            },
+            OnForbidden = ctx =>
+            {
+                ctx.Response.StatusCode = 403;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":403,"message":"Forbidden"}""");
+            }
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// -- Controllers with ValidateModelFilter ----------------------------------
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<ValidateModelFilter>();
+});
+
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IRateLimitService, RateLimitService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Writes a consistent JSON body when the in-memory limiter rejects a request
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.ContentType = "application/json";
+
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            ctx.HttpContext.Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString();
+
+        await ctx.HttpContext.Response.WriteAsync(
+            """{"statusCode":429,"message":"Too many requests. Please slow down."}""",
+            ct);
+    };
+
+    // -- "products" policy: 60 req / min per IP --------------------------------
+    options.AddPolicy("products", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "search" policy: 30 req / min per IP ---------------------------------
+    options.AddPolicy("search", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "general" policy: 100 req / min per IP --------------------------------
+    // Applied to cart, wishlist, orders, banners
+    options.AddPolicy("general", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+});
+
+// -- Swagger with JWT bearer ------------------------------------------------
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "EcommerceApp API",
+        Version = "v1"
+    });
+
+    // JWT bearer definition — enables the Authorize button in Swagger UI
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. " +
+                       "Enter your token below (without the 'Bearer ' prefix).",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    // Apply globally — every endpoint shows the lock icon in Swagger UI
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id   = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+// -- Build ------------------------------------------------------------------
+var app = builder.Build();
+
+// -- Middleware pipeline (order matters) ------------------------------------
+
+// 1. Correlation ID first — every subsequent log entry gets the ID
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// 2. Global exception handler — catches anything thrown below this point
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "EcommerceApp v1");
+        c.DisplayRequestDuration();
+    });
+}
+
+app.UseHttpsRedirection();
+
+// 3. Authentication — parses and validates the JWT
+app.UseAuthentication();
+
+// 4. Session validation — confirms session is not revoked in DB
+app.UseMiddleware<SessionValidationMiddleware>();
+
+// 5. Authorization — enforces [Authorize] attributes
+app.UseAuthorization();
+
+app.UseRateLimiter();
+
+app.MapControllers();
+
+app.Run();
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/Repositories/ProductRepository.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace EcommerceApp.Infrastructure.Persistence.Repositories;
+
+public class ProductRepository : GenericRepository<Product>, IProductRepository
+{
+    public ProductRepository(AppDbContext context) : base(context) { }
+
+    // -- Single-product reads --------------------------------------------------
+
+    public async Task<Product?> GetBySlugAsync(
+        string slug,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .FirstOrDefaultAsync(
+                p => p.Slug == slug && p.IsActive,
+                cancellationToken);
+    }
+
+    public async Task<Product?> GetWithReviewsAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(p => p.Reviews.Where(r => r.IsApproved && !r.IsDeleted))
+                .ThenInclude(r => r.User)
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+    }
+
+    // -- Full catalog query ----------------------------------------------------
+
+    public async Task<PagedResult<Product>> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        string? category,
+        string? subCategory,
+        decimal? minPrice,
+        decimal? maxPrice,
+        double? minRating,
+        string? brand,
+        string? sortBy,
+        bool sortDescending,
+        bool? isActive,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet.AsQueryable();
+
+        // -- Filters -----------------------------------------------------------
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(p =>
+                p.Category.ToLower() == category.ToLower());
+
+        if (!string.IsNullOrWhiteSpace(subCategory))
+            query = query.Where(p =>
+                p.SubCategory != null &&
+                p.SubCategory.ToLower() == subCategory.ToLower());
+
+        if (minPrice.HasValue)
+            query = query.Where(p =>
+                (p.DiscountedPrice ?? p.Price) >= minPrice.Value);
+
+        if (maxPrice.HasValue)
+            query = query.Where(p =>
+                (p.DiscountedPrice ?? p.Price) <= maxPrice.Value);
+
+        if (minRating.HasValue)
+            query = query.Where(p => p.AverageRating >= minRating.Value);
+
+        if (!string.IsNullOrWhiteSpace(brand))
+            query = query.Where(p =>
+                p.Brand != null &&
+                p.Brand.ToLower() == brand.ToLower());
+
+        if (isActive.HasValue)
+            query = query.Where(p => p.IsActive == isActive.Value);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        // -- Sorting -----------------------------------------------------------
+        // EF Core translates (DiscountedPrice ?? Price) ? COALESCE(DiscountedPrice, Price)
+        query = sortBy?.ToLower() switch
+        {
+            "price-asc" => query.OrderBy(p => p.DiscountedPrice ?? p.Price),
+            "price-desc" => query.OrderByDescending(p => p.DiscountedPrice ?? p.Price),
+            "rating" => query.OrderByDescending(p => p.AverageRating),
+            "popular" => query.OrderByDescending(p => p.SoldCount),
+            "oldest" => query.OrderBy(p => p.CreatedAt),
+            _ => query.OrderByDescending(p => p.CreatedAt)     // default: newest
+        };
+
+        var items = await query
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return PagedResult<Product>.Create(items, totalCount, pageNumber, pageSize);
+    }
+
+    // -- Home page sections ----------------------------------------------------
+
+    public async Task<IReadOnlyList<Product>> GetBestsellersAsync(
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive)
+            .OrderByDescending(p => p.SoldCount)
+            .Take(count)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Product>> GetFeaturedAsync(
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive && p.IsFeatured)
+            .OrderByDescending(p => p.CreatedAt)
+            .Take(count)
+            .ToListAsync(cancellationToken);
+    }
+
+    // -- Category helpers ------------------------------------------------------
+
+    public async Task<IReadOnlyList<string>> GetDistinctCategoriesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive)
+            .Select(p => p.Category)
+            .Distinct()
+            .OrderBy(c => c)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<(string Category, int Count)>> GetCategoriesWithCountAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _dbSet
+            .Where(p => p.IsActive)
+            .GroupBy(p => p.Category)
+            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .OrderBy(x => x.Category)
+            .ToListAsync(cancellationToken);
+
+        return result
+            .Select(x => (x.Category, x.Count))
+            .ToList();
+    }
+
+    // -- Rating recalculation --------------------------------------------------
+
+    public async Task UpdateAverageRatingAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default)
+    {
+        var stats = await _context.ProductReviews
+            .Where(r => r.ProductId == productId && r.IsApproved && !r.IsDeleted)
+            .GroupBy(r => r.ProductId)
+            .Select(g => new
+            {
+                AverageRating = g.Average(r => (double)r.Rating),
+                ReviewCount = g.Count()
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var product = await _dbSet
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+
+        if (product == null) return;
+
+        product.AverageRating = stats?.AverageRating ?? 0.0;
+        product.ReviewCount = stats?.ReviewCount ?? 0;
+        product.UpdatedAt = DateTime.UtcNow;
+
+        _context.Entry(product).State = EntityState.Modified;
+    }
+
+    // -- Slug checks -----------------------------------------------------------
+
+    public async Task<bool> SlugExistsAsync(
+        string slug,
+        CancellationToken cancellationToken = default)
+    {
+        // IgnoreQueryFilters — a slug used by a soft-deleted product is still reserved
+        return await _dbSet
+            .IgnoreQueryFilters()
+            .AnyAsync(p => p.Slug == slug, cancellationToken);
+    }
+
+    public async Task<bool> SlugExistsForOtherProductAsync(
+        string slug,
+        Guid excludeProductId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .IgnoreQueryFilters()
+            .AnyAsync(
+                p => p.Slug == slug && p.Id != excludeProductId,
+                cancellationToken);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/Repositories/OrderRepository.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Enums;
+using EcommerceApp.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace EcommerceApp.Infrastructure.Persistence.Repositories;
+
+public class OrderRepository : GenericRepository<Order>, IOrderRepository
+{
+    public OrderRepository(AppDbContext context) : base(context) { }
+
+    // -- Single-order lookups --------------------------------------------------
+
+    public async Task<Order?> GetByOrderNumberAsync(
+        string orderNumber,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(o => o.Items)
+            .Include(o => o.User)
+            .FirstOrDefaultAsync(
+                o => o.OrderNumber == orderNumber,
+                cancellationToken);
+    }
+
+    public async Task<Order?> GetByIdForUserAsync(
+    Guid orderId,
+    Guid userId,
+    CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(x => x.Items.Where(i => !i.IsDeleted))
+            .FirstOrDefaultAsync(
+                x => x.Id == orderId && x.UserId == userId,
+                cancellationToken);
+    }
+
+    public async Task<Order?> GetByStripeSessionIdAsync(
+        string stripeSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        // IgnoreQueryFilters — webhook must process even if order was soft-deleted
+        return await _dbSet
+            .IgnoreQueryFilters()
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(
+                o => o.StripeSessionId == stripeSessionId,
+                cancellationToken);
+    }
+
+    public async Task<Order?> GetWithItemsAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(o => o.Items)
+            .Include(o => o.User)
+            .FirstOrDefaultAsync(o => o.Id == orderId, cancellationToken);
+    }
+
+    // -- Customer paginated order history --------------------------------------
+
+    public async Task<PagedResult<Order>> GetByUserIdPagedAsync(
+        Guid userId,
+        int pageNumber,
+        int pageSize,
+        TrackingStatus? status,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet
+            .Include(o => o.Items)
+            .Where(o => o.UserId == userId);
+
+        if (status.HasValue)
+            query = query.Where(o => o.TrackingStatus == status.Value);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return PagedResult<Order>.Create(items, totalCount, pageNumber, pageSize);
+    }
+
+    // -- Admin paginated order list --------------------------------------------
+
+    public async Task<PagedResult<Order>> GetAdminPagedAsync(
+        int pageNumber,
+        int pageSize,
+        TrackingStatus? trackingStatus,
+        PaymentStatus? paymentStatus,
+        DateTime? from,
+        DateTime? to,
+        string? searchTerm,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet
+            .Include(o => o.User)
+            .AsQueryable();
+
+        // -- Filters -----------------------------------------------------------
+        if (trackingStatus.HasValue)
+            query = query.Where(o => o.TrackingStatus == trackingStatus.Value);
+
+        if (paymentStatus.HasValue)
+            query = query.Where(o => o.PaymentStatus == paymentStatus.Value);
+
+        if (from.HasValue)
+            query = query.Where(o => o.CreatedAt >= from.Value);
+
+        if (to.HasValue)
+            query = query.Where(o => o.CreatedAt <= to.Value.AddDays(1));
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var term = searchTerm.ToLower().Trim();
+            query = query.Where(o =>
+                o.OrderNumber.ToLower().Contains(term) ||
+                o.User.Email.ToLower().Contains(term) ||
+                (o.User.FirstName + " " + o.User.LastName)
+                    .ToLower().Contains(term));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return PagedResult<Order>.Create(items, totalCount, pageNumber, pageSize);
+    }
+
+    // -- Order number generation -----------------------------------------------
+
+    public async Task<string> GenerateOrderNumberAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var today = DateTime.UtcNow.Date;
+        var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
+
+        // Find the last order created today to get the current sequence
+        var lastOrderNumber = await _dbSet
+            .IgnoreQueryFilters()     // include soft-deleted to keep numbering consistent
+            .Where(o => o.CreatedAt.Date == today)
+            .OrderByDescending(o => o.OrderNumber)
+            .Select(o => o.OrderNumber)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var sequence = 1;
+        if (lastOrderNumber != null)
+        {
+            // Format: ORD-YYYYMMDD-NNNNN ? split on '-', take last segment
+            var parts = lastOrderNumber.Split('-');
+            if (parts.Length == 3 && int.TryParse(parts[2], out var last))
+                sequence = last + 1;
+        }
+
+        return $"ORD-{dateStr}-{sequence:D5}";
+    }
+
+    // -- Admin dashboard stats -------------------------------------------------
+
+    public async Task<OrderStats> GetStatsAsync(
+        DateTime? from,
+        DateTime? to,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet.AsQueryable();
+
+        if (from.HasValue)
+            query = query.Where(o => o.CreatedAt >= from.Value);
+
+        if (to.HasValue)
+            query = query.Where(o => o.CreatedAt <= to.Value.AddDays(1));
+
+        // Run revenue and count queries in parallel
+        var totalOrdersTask = query.CountAsync(cancellationToken);
+
+        var totalRevenueTask = query
+            .Where(o => o.PaymentStatus == PaymentStatus.Paid)
+            .SumAsync(o => (decimal?)o.TotalAmount, cancellationToken);
+
+        var avgOrderValueTask = query
+            .AverageAsync(o => (decimal?)o.TotalAmount, cancellationToken);
+
+        // Status breakdown — one group-by instead of multiple Count queries
+        var statusCountsTask = query
+            .GroupBy(o => o.TrackingStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        await Task.WhenAll(
+            totalOrdersTask,
+            totalRevenueTask,
+            avgOrderValueTask,
+            statusCountsTask);
+
+        var statusCounts = statusCountsTask.Result;
+
+        int CountByStatus(TrackingStatus s) =>
+            statusCounts.FirstOrDefault(x => x.Status == s)?.Count ?? 0;
+
+        return new OrderStats(
+            TotalRevenue: totalRevenueTask.Result ?? 0m,
+            TotalOrders: totalOrdersTask.Result,
+            PendingOrders: CountByStatus(TrackingStatus.Placed),
+            ProcessingOrders:
+                CountByStatus(TrackingStatus.Processing) +
+                CountByStatus(TrackingStatus.Confirmed),
+            ShippedOrders:
+                CountByStatus(TrackingStatus.Shipped) +
+                CountByStatus(TrackingStatus.OutForDelivery),
+            DeliveredOrders: CountByStatus(TrackingStatus.Delivered),
+            CancelledOrders: CountByStatus(TrackingStatus.Cancelled),
+            AverageOrderValue: avgOrderValueTask.Result ?? 0m
+        );
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/AppDbContext.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using System.Reflection;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+public class AppDbContext : DbContext
+{
+    private readonly ICurrentUserService _currentUserService;
+
+    public AppDbContext(
+        DbContextOptions<AppDbContext> options,
+        ICurrentUserService currentUserService)
+        : base(options)
+    {
+        _currentUserService = currentUserService;
+    }
+
+    // -- DbSets ----------------------------------------------------------------
+    public DbSet<User> Users => Set<User>();
+    public DbSet<OtpStore> OtpStores => Set<OtpStore>();
+    public DbSet<TokenStore> TokenStores => Set<TokenStore>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<CartItem> CartItems => Set<CartItem>();
+    public DbSet<ElasticStore> ElasticStores => Set<ElasticStore>();
+    public DbSet<Cart> Carts => Set<Cart>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<Address> Addresses => Set<Address>();
+    public DbSet<Banner> Banners => Set<Banner>();
+    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
+    public DbSet<Wishlist> Wishlists => Set<Wishlist>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Scans this assembly and applies every IEntityTypeConfiguration<T> class.
+        // Each configuration is responsible for its own query filter,
+        // column types, indexes, and FK relationships.
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        base.OnModelCreating(modelBuilder);
+    }
+
+    // -- Audit field auto-population -------------------------------------------
+    public override async Task<int> SaveChangesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+        var userId = _currentUserService.UserId;
+
+        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.Entity.CreatedAt = now;
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.CreatedBy = userId;
+                    entry.Entity.UpdatedBy = userId;
+                    entry.Entity.IsDeleted = false;
+                    break;
+
+                case EntityState.Modified:
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.UpdatedBy = userId;
+                    // Never allow overwriting the original author / timestamp
+                    entry.Property(e => e.CreatedAt).IsModified = false;
+                    entry.Property(e => e.CreatedBy).IsModified = false;
+                    break;
+            }
+        }
+
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+}
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Events/ProductCreatedNotification.cs
+================================================================================
+
+namespace EcommerceApp.Domain.Events;
+
+/// <summary>
+/// Published when a new product is created by an admin.
+/// Consumed by:
+///   - ProductSearchSyncService  ? indexes the product in Elasticsearch + ElasticStore SQL
+/// </summary>
+public record ProductCreatedNotification(
+    Guid ProductId,
+    string Name,
+    string Slug,
+    string Category,
+    decimal Price,
+    bool IsActive
+) : IDomainEvent;
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Events/ProductUpdatedNotification.cs
+================================================================================
+
+namespace EcommerceApp.Domain.Events;
+
+/// <summary>
+/// Published when any product field is changed by an admin.
+/// Consumed by:
+///   - ProductSearchSyncService  ? re-indexes the product in Elasticsearch + ElasticStore SQL
+///   - PriceDropAlertService     ? checks if OldPrice > NewPrice and notifies wishlist/cart users
+/// </summary>
+public record ProductUpdatedNotification(
+    Guid ProductId,
+    string Name,
+    string Slug,
+    decimal OldPrice,
+    decimal NewPrice,
+    bool IsActive
+) : IDomainEvent;
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Events/ProductDeletedNotification.cs
+================================================================================
+
+namespace EcommerceApp.Domain.Events;
+
+/// <summary>
+/// Published when a product is soft-deleted by an admin.
+/// Consumed by:
+///   - ProductSearchSyncService  ? removes the document from Elasticsearch
+///                                 and marks ElasticStore row as inactive
+/// </summary>
+public record ProductDeletedNotification(
+    Guid ProductId,
+    string Name,
+    string Slug
+) : IDomainEvent;
