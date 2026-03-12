@@ -1,0 +1,1598 @@
+﻿===== FILE: src/EcommerceApp.API/Controllers/ProductsController.cs =====
+using EcommerceApp.API.Models.Requests.Products;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Application.Features.Products.Queries;
+using EcommerceApp.Domain.Common;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+
+namespace EcommerceApp.API.Controllers;
+
+/// <summary>
+/// Public product catalogue endpoints — no authentication required.
+/// All queries use IsActive: true so inactive products are invisible to shoppers.
+/// </summary>
+[ApiController]
+[Route("api/products")]
+[AllowAnonymous]
+[EnableRateLimiting("products")]
+public class ProductsController : ControllerBase
+{
+    private readonly ISender _sender;
+
+    public ProductsController(ISender sender) => _sender = sender;
+
+    // ── GET /api/products ──────────────────────────────────────────────────────
+    // ?pageNumber=1&pageSize=20&category=Shoes&brand=Nike&minPrice=500&sortBy=price
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<ProductListDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetProducts(
+        [FromQuery] GetProductsRequest req,
+        CancellationToken ct)
+    {
+        var query = new GetProductsQuery(
+            PageNumber: req.PageNumber,
+            PageSize: req.PageSize,
+            Category: req.Category,
+            SubCategory: req.SubCategory,
+            MinPrice: req.MinPrice,
+            MaxPrice: req.MaxPrice,
+            MinRating: req.MinRating,
+            Brand: req.Brand,
+            SortBy: req.SortBy,
+            SortDescending: req.SortDescending,
+            IsActive: true);           // public always sees active only
+
+        return Ok(await _sender.Send(query, ct));
+    }
+
+    // ── GET /api/products/categories ──────────────────────────────────────────
+    [HttpGet("categories")]
+    [ProducesResponseType(typeof(IReadOnlyList<CategoryDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetCategories(CancellationToken ct)
+        => Ok(await _sender.Send(new GetCategoriesQuery(), ct));
+
+    // ── GET /api/products/bestsellers?count=8 ─────────────────────────────────
+    [HttpGet("bestsellers")]
+    [ProducesResponseType(typeof(IReadOnlyList<ProductListDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetBestsellers(
+        [FromQuery] int count = 8,
+        CancellationToken ct = default)
+        => Ok(await _sender.Send(new GetBestsellersQuery(count), ct));
+
+    // ── GET /api/products/{slug} ───────────────────────────────────────────────
+    // Must be declared LAST — {slug} is a catch-all and would swallow
+    // /categories and /bestsellers if placed before them.
+    [HttpGet("{slug}")]
+    [ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetBySlug(string slug, CancellationToken ct)
+        => Ok(await _sender.Send(new GetProductBySlugQuery(Slug: slug), ct));
+}
+
+
+===== FILE: src/EcommerceApp.API/Controllers/SearchController.cs =====
+using EcommerceApp.Application.Features.Search.DTOs;
+using EcommerceApp.Application.Features.Search.Queries;
+using EcommerceApp.Domain.Common;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+
+namespace EcommerceApp.API.Controllers;
+
+/// <summary>
+/// Product search endpoint.
+///
+/// GET /api/search?term=shoes&page=1&pageSize=20
+///
+/// Routes to whichever ISearchService is active:
+///   - SearchSettings:Provider = "Elasticsearch" → full fuzzy search
+///   - SearchSettings:Provider = "Sql"           → LIKE-based fallback
+///
+/// Anonymous — no auth required.
+/// Rate limited in Part 22 (token bucket: 100 tokens/min, 2/sec refill).
+/// </summary>
+[ApiController]
+[Route("api/search")]
+[AllowAnonymous]
+[EnableRateLimiting("search")]
+public class SearchController : ControllerBase
+{
+    private readonly ISender _sender;
+
+    public SearchController(ISender sender) => _sender = sender;
+
+    // ── GET /api/search ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Search products by text query.
+    /// Returns a paginated result set matching the search term.
+    /// </summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(PagedResult<SearchResultDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Search(
+        [FromQuery] string term,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var result = await _sender.Send(
+            new SearchProductsQuery(term, page, pageSize), ct);
+
+        return Ok(result);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.API/Controllers/v1/CartController.cs =====
+using EcommerceApp.Application.Features.Cart.Commands;
+using EcommerceApp.Application.Features.Cart.DTOs;
+using EcommerceApp.Application.Features.Cart.Queries;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace EcommerceApp.API.Controllers.v1;
+
+[ApiController]
+[Route("api/v1/cart")]
+[Authorize]
+public class CartController : ControllerBase
+{
+    private readonly ISender _sender;
+
+    public CartController(ISender sender)
+    {
+        _sender = sender;
+    }
+
+    [HttpGet]
+    [ProducesResponseType(typeof(CartDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetCart(CancellationToken ct)
+    {
+        var result = await _sender.Send(new GetCartQuery(), ct);
+        return Ok(result);
+    }
+
+    [HttpPost]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> AddToCart(
+        [FromBody] AddToCartRequest request,
+        CancellationToken ct)
+    {
+        await _sender.Send(new AddToCartCommand(request.ProductId, request.Quantity), ct);
+        return Ok(new { message = "Item added to cart." });
+    }
+
+    [HttpPut("{cartItemId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateCartItem(
+        Guid cartItemId,
+        [FromBody] UpdateCartItemRequest request,
+        CancellationToken ct)
+    {
+        await _sender.Send(new UpdateCartItemCommand(cartItemId, request.Quantity), ct);
+        return Ok(new { message = "Cart item updated." });
+    }
+
+    [HttpDelete("{cartItemId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveCartItem(Guid cartItemId, CancellationToken ct)
+    {
+        await _sender.Send(new RemoveCartItemCommand(cartItemId), ct);
+        return Ok(new { message = "Cart item removed." });
+    }
+
+    [HttpDelete]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ClearCart(CancellationToken ct)
+    {
+        await _sender.Send(new ClearCartCommand(), ct);
+        return Ok(new { message = "Cart cleared." });
+    }
+
+    public class AddToCartRequest
+    {
+        public Guid ProductId { get; set; }
+        public int Quantity { get; set; }
+    }
+
+    public class UpdateCartItemRequest
+    {
+        public int Quantity { get; set; }
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/ProductDto.cs =====
+namespace EcommerceApp.Application.Features.Products.DTOs;
+
+/// <summary>
+/// Full product detail — returned by GetProductBySlugQuery.
+/// Used on the product detail page.
+/// </summary>
+public class ProductDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Slug { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public string? Brand { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public decimal EffectivePrice { get; set; }
+    public decimal? DiscountPercentage { get; set; }
+    public int StockQuantity { get; set; }
+    public int ReservedQuantity { get; set; }
+    public int AvailableStock { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsFeatured { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
+    public string? MainImageUrl { get; set; }
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+    public double AverageRating { get; set; }
+    public int ReviewCount { get; set; }
+    public int SoldCount { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/ProductListDto.cs =====
+namespace EcommerceApp.Application.Features.Products.DTOs;
+
+/// <summary>
+/// Lightweight product card — returned by GetProductsQuery and GetBestsellersQuery.
+/// Omits full description, all images, tags, and dimensions to keep payload small.
+/// </summary>
+public class ProductListDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Slug { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public string? Brand { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public decimal EffectivePrice { get; set; }
+    public decimal? DiscountPercentage { get; set; }
+    public int AvailableStock { get; set; }
+    public bool IsActive { get; set; }
+    public bool IsFeatured { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? MainImageUrl { get; set; }
+    public double AverageRating { get; set; }
+    public int ReviewCount { get; set; }
+    public int SoldCount { get; set; }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/DTOs/CategoryDto.cs =====
+namespace EcommerceApp.Application.Features.Products.DTOs;
+
+/// <summary>
+/// Category name with active product count.
+/// Category is a simple string property on Product in this design — not a separate entity.
+/// </summary>
+public record CategoryDto(
+    string Category,
+    int Count);
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetProductsQuery.cs =====
+using AutoMapper;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Queries;
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+public record GetProductsQuery(
+    int PageNumber = 1,
+    int PageSize = 20,
+    string? Category = null,
+    string? SubCategory = null,
+    decimal? MinPrice = null,
+    decimal? MaxPrice = null,
+    double? MinRating = null,
+    string? Brand = null,
+    string? SortBy = null,
+    bool SortDescending = true,
+    bool? IsActive = true   // ← ADDED: null = all (admin), true = active only (public)
+) : IRequest<PagedResult<ProductListDto>>;
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public class GetProductsQueryHandler
+    : IRequestHandler<GetProductsQuery, PagedResult<ProductListDto>>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IMapper _mapper;
+
+    public GetProductsQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
+    {
+        _unitOfWork = unitOfWork;
+        _mapper = mapper;
+    }
+
+    public async Task<PagedResult<ProductListDto>> Handle(
+        GetProductsQuery query,
+        CancellationToken cancellationToken)
+    {
+        var pageSize = Math.Min(query.PageSize, 100);
+
+        var paged = await _unitOfWork.Products.GetPagedAsync(
+            pageNumber: query.PageNumber,
+            pageSize: pageSize,
+            category: query.Category,
+            subCategory: query.SubCategory,
+            minPrice: query.MinPrice,
+            maxPrice: query.MaxPrice,
+            minRating: query.MinRating,
+            brand: query.Brand,
+            sortBy: query.SortBy,
+            sortDescending: query.SortDescending,
+            isActive: query.IsActive,   // ← CHANGED: was hardcoded true
+            cancellationToken: cancellationToken);
+
+        var dtos = _mapper.Map<IReadOnlyList<ProductListDto>>(paged.Items);
+
+        return PagedResult<ProductListDto>.Create(
+            dtos, paged.TotalCount, paged.PageNumber, paged.PageSize);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetProductBySlugQuery.cs =====
+using AutoMapper;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Queries;
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+public record GetProductBySlugQuery(
+    string? Slug = null,
+    Guid? Id = null,
+    bool IgnoreActiveFilter = false   // ← ADDED: admin sets this true to see inactive products
+) : IRequest<ProductDto>;
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public class GetProductBySlugQueryHandler
+    : IRequestHandler<GetProductBySlugQuery, ProductDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IMapper _mapper;
+
+    public GetProductBySlugQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
+    {
+        _unitOfWork = unitOfWork;
+        _mapper = mapper;
+    }
+
+    public async Task<ProductDto> Handle(
+        GetProductBySlugQuery query,
+        CancellationToken cancellationToken)
+    {
+        Domain.Entities.Product? product = null;
+
+        if (query.Slug is not null)
+            product = await _unitOfWork.Products.GetBySlugAsync(
+                query.Slug, cancellationToken);
+        else if (query.Id.HasValue)
+            product = await _unitOfWork.Products.GetByIdAsync(
+                query.Id.Value, cancellationToken);
+
+        // Public: inactive products are treated as not found
+        // Admin: passes IgnoreActiveFilter = true so inactive products are visible
+        var notFound = product == null ||
+                       (!query.IgnoreActiveFilter && !product.IsActive);
+
+        if (notFound)
+            throw new NotFoundException(
+                "Product",
+                (object?)query.Slug ?? query.Id?.ToString() ?? "unknown");
+
+        return _mapper.Map<ProductDto>(product);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetBestsellersQuery.cs =====
+using AutoMapper;
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Queries;
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Returns the top-N products ordered by SoldCount descending.
+/// Used on the Home page "Bestsellers" row.
+/// </summary>
+public record GetBestsellersQuery(int Count = 8) : IRequest<IReadOnlyList<ProductListDto>>;
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public class GetBestsellersQueryHandler
+    : IRequestHandler<GetBestsellersQuery, IReadOnlyList<ProductListDto>>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IMapper _mapper;
+
+    public GetBestsellersQueryHandler(IUnitOfWork unitOfWork, IMapper mapper)
+    {
+        _unitOfWork = unitOfWork;
+        _mapper = mapper;
+    }
+
+    public async Task<IReadOnlyList<ProductListDto>> Handle(
+        GetBestsellersQuery query,
+        CancellationToken cancellationToken)
+    {
+        var count = Math.Clamp(query.Count, 1, 50);
+        var products = await _unitOfWork.Products.GetBestsellersAsync(
+            count, cancellationToken);
+
+        return _mapper.Map<IReadOnlyList<ProductListDto>>(products);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Products/Queries/GetCategoriesQuery.cs =====
+using EcommerceApp.Application.Features.Products.DTOs;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Products.Queries;
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Returns all distinct categories with the count of active products in each.
+/// Used on the Home page Category Grid and the All Categories page.
+/// </summary>
+public record GetCategoriesQuery : IRequest<IReadOnlyList<CategoryDto>>;
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public class GetCategoriesQueryHandler
+    : IRequestHandler<GetCategoriesQuery, IReadOnlyList<CategoryDto>>
+{
+    private readonly IUnitOfWork _unitOfWork;
+
+    public GetCategoriesQueryHandler(IUnitOfWork unitOfWork)
+    {
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task<IReadOnlyList<CategoryDto>> Handle(
+        GetCategoriesQuery query,
+        CancellationToken cancellationToken)
+    {
+        var categoriesWithCount = await _unitOfWork.Products
+            .GetCategoriesWithCountAsync(cancellationToken);
+
+        return categoriesWithCount
+            .Select(c => new CategoryDto(c.Category, c.Count))
+            .ToList();
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartDto.cs =====
+namespace EcommerceApp.Application.Features.Cart.DTOs;
+
+public class CartDto
+{
+    public Guid CartId { get; set; }
+    public Guid UserId { get; set; }
+    public int TotalItems { get; set; }
+    public decimal Subtotal { get; set; }
+    public bool HasOutOfStockItems { get; set; }
+    public bool HasPriceChanges { get; set; }
+    public List<CartItemDto> Items { get; set; } = new();
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartItemDto.cs =====
+namespace EcommerceApp.Application.Features.Cart.DTOs;
+
+public class CartItemDto
+{
+    public Guid CartItemId { get; set; }
+    public Guid ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string ProductSlug { get; set; } = string.Empty;
+    public string? MainImageUrl { get; set; }
+
+    public int Quantity { get; set; }
+
+    // Snapshot at time of adding
+    public decimal PriceAtAddition { get; set; }
+
+    // Live price from Product
+    public decimal CurrentUnitPrice { get; set; }
+
+    public decimal LineTotal { get; set; }
+
+    public int AvailableStock { get; set; }
+    public bool IsOutOfStock { get; set; }
+    public bool HasPriceChanged { get; set; }
+    public bool IsActiveProduct { get; set; }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Cart/Commands/AddToCartCommand.cs =====
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Cart.Commands;
+
+public record AddToCartCommand(Guid ProductId, int Quantity) : IRequest;
+
+public class AddToCartCommandHandler : IRequestHandler<AddToCartCommand>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUserService;
+
+    public AddToCartCommandHandler(
+        IUnitOfWork unitOfWork,
+        ICurrentUserService currentUserService)
+    {
+        _unitOfWork = unitOfWork;
+        _currentUserService = currentUserService;
+    }
+
+    public async Task Handle(AddToCartCommand request, CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+            ?? throw new UnauthorizedException("User is not authenticated.");
+
+        var product = await _unitOfWork.Products.GetByIdAsync(request.ProductId, cancellationToken)
+            ?? throw new NotFoundException("Product", request.ProductId);
+
+        if (!product.IsActive)
+            throw new ValidationException("ProductId", "Product is inactive and cannot be added to cart.");
+
+        if (product.AvailableStock < request.Quantity)
+            throw new ValidationException("Quantity",
+                $"Only {product.AvailableStock} units are available.");
+
+        var cart = await _unitOfWork.Carts.GetByUserIdAsync(userId, cancellationToken);
+
+        if (cart == null)
+        {
+            cart = new Domain.Entities.Cart
+            {
+                UserId = userId,
+                LastActivityAt = DateTime.UtcNow
+            };
+
+            await _unitOfWork.Carts.AddAsync(cart, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        var existingItem = await _unitOfWork.Carts.GetCartItemAsync(cart.Id, request.ProductId, cancellationToken);
+
+        if (existingItem != null)
+        {
+            var newQuantity = existingItem.Quantity + request.Quantity;
+
+            if (newQuantity > product.AvailableStock)
+                throw new ValidationException("Quantity",
+                    $"Cannot add more than available stock. Available: {product.AvailableStock}.");
+
+            existingItem.Quantity = newQuantity;
+            cart.LastActivityAt = DateTime.UtcNow;
+
+            await _unitOfWork.Carts.UpdateAsync(cart, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        var item = new CartItem
+        {
+            CartId = cart.Id,
+            ProductId = product.Id,
+            Quantity = request.Quantity,
+            UnitPrice = product.EffectivePrice
+        };
+
+        await _unitOfWork.Carts.AddCartItemAsync(item, cancellationToken);
+
+        cart.LastActivityAt = DateTime.UtcNow;
+        await _unitOfWork.Carts.UpdateAsync(cart, cancellationToken);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Cart/Queries/GetCartQuery.cs =====
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Features.Cart.DTOs;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Cart.Queries;
+
+public record GetCartQuery : IRequest<CartDto>;
+
+public class GetCartQueryHandler : IRequestHandler<GetCartQuery, CartDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUserService;
+
+    public GetCartQueryHandler(
+        IUnitOfWork unitOfWork,
+        ICurrentUserService currentUserService)
+    {
+        _unitOfWork = unitOfWork;
+        _currentUserService = currentUserService;
+    }
+
+    public async Task<CartDto> Handle(GetCartQuery request, CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+            ?? throw new UnauthorizedException("User is not authenticated.");
+
+        var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken);
+
+        if (cart == null)
+        {
+            return new CartDto
+            {
+                CartId = Guid.Empty,
+                UserId = userId,
+                TotalItems = 0,
+                Subtotal = 0,
+                HasOutOfStockItems = false,
+                HasPriceChanges = false,
+                Items = new List<CartItemDto>()
+            };
+        }
+
+        var items = cart.Items.Select(i =>
+        {
+            var currentPrice = i.Product.EffectivePrice;
+            var availableStock = i.Product.AvailableStock;
+            var isOutOfStock = !i.Product.IsActive || availableStock <= 0 || i.Quantity > availableStock;
+            var hasPriceChanged = i.UnitPrice != currentPrice;
+
+            return new CartItemDto
+            {
+                CartItemId = i.Id,
+                ProductId = i.ProductId,
+                ProductName = i.Product.Name,
+                ProductSlug = i.Product.Slug,
+                MainImageUrl = i.Product.ImageUrls.FirstOrDefault(),
+                Quantity = i.Quantity,
+                PriceAtAddition = i.UnitPrice,
+                CurrentUnitPrice = currentPrice,
+                LineTotal = currentPrice * i.Quantity,
+                AvailableStock = availableStock,
+                IsOutOfStock = isOutOfStock,
+                HasPriceChanged = hasPriceChanged,
+                IsActiveProduct = i.Product.IsActive
+            };
+        }).ToList();
+
+        return new CartDto
+        {
+            CartId = cart.Id,
+            UserId = cart.UserId,
+            TotalItems = items.Sum(x => x.Quantity),
+            Subtotal = items.Sum(x => x.LineTotal),
+            HasOutOfStockItems = items.Any(x => x.IsOutOfStock),
+            HasPriceChanges = items.Any(x => x.HasPriceChanged),
+            Items = items
+        };
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Search/DTOs/SearchResultDto.cs =====
+namespace EcommerceApp.Application.Features.Search.DTOs;
+
+/// <summary>
+/// Search result item returned from either Elasticsearch or the SQL fallback.
+/// Shape is identical regardless of which backend is active so the frontend
+/// never needs to change when the search provider is switched.
+/// </summary>
+public class SearchResultDto
+{
+    public Guid Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Slug { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public string? Brand { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+    public decimal EffectivePrice { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? MainImageUrl { get; set; }
+    public double AverageRating { get; set; }
+    public int ReviewCount { get; set; }
+    public int SoldCount { get; set; }
+    public bool IsActive { get; set; }
+    /// <summary>
+    /// Relevance score from Elasticsearch, or a computed relevance value
+    /// from the SQL fallback. Used for result ranking.
+    /// </summary>
+    public double? Score { get; set; }
+}
+
+
+===== FILE: src/EcommerceApp.Application/Features/Search/Queries/SearchProductsQuery.cs =====
+using EcommerceApp.Application.Features.Search.DTOs;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Application.Interfaces;
+using FluentValidation;
+using MediatR;
+
+namespace EcommerceApp.Application.Features.Search.Queries;
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Full-text product search query.
+/// Dispatched by SearchController and routed to whichever ISearchService
+/// implementation is active (Elasticsearch or SQL fallback).
+/// </summary>
+public record SearchProductsQuery(
+    string Term,
+    int Page = 1,
+    int PageSize = 20
+) : IRequest<PagedResult<SearchResultDto>>;
+
+// ── Validator ─────────────────────────────────────────────────────────────────
+
+public class SearchProductsQueryValidator : AbstractValidator<SearchProductsQuery>
+{
+    public SearchProductsQueryValidator()
+    {
+        RuleFor(x => x.Term)
+            .NotEmpty().WithMessage("Search term is required.")
+            .MinimumLength(1).WithMessage("Search term must be at least 1 character.")
+            .MaximumLength(200).WithMessage("Search term must not exceed 200 characters.");
+
+        RuleFor(x => x.Page)
+            .GreaterThanOrEqualTo(1).WithMessage("Page must be at least 1.");
+
+        RuleFor(x => x.PageSize)
+            .InclusiveBetween(1, 100)
+            .WithMessage("Page size must be between 1 and 100.");
+    }
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
+public class SearchProductsQueryHandler
+    : IRequestHandler<SearchProductsQuery, PagedResult<SearchResultDto>>
+{
+    private readonly ISearchService _searchService;
+
+    public SearchProductsQueryHandler(ISearchService searchService)
+    {
+        _searchService = searchService;
+    }
+
+    public async Task<PagedResult<SearchResultDto>> Handle(
+        SearchProductsQuery query,
+        CancellationToken cancellationToken)
+    {
+        return await _searchService.SearchAsync(
+            term: query.Term,
+            page: query.Page,
+            pageSize: Math.Min(query.PageSize, 100),
+            cancellationToken: cancellationToken);
+    }
+}
+
+
+===== FILE: src/EcommerceApp.Domain/Entities/Product.cs =====
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Product : BaseEntity
+{
+    public string Name { get; set; } = string.Empty;
+
+    // URL-friendly unique identifier e.g. "apple-iphone-15-pro-128gb"
+    public string Slug { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+
+    // Total physical stock in warehouse
+    public int StockQuantity { get; set; } = 0;
+
+    // Units currently locked by pending Stripe checkout sessions
+    public int ReservedQuantity { get; set; } = 0;
+
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? Brand { get; set; }
+
+    // Stored as JSON array in the database column
+    public List<string> ImageUrls { get; set; } = new();
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+
+    public double AverageRating { get; set; } = 0;
+    public int ReviewCount { get; set; } = 0;
+    public int SoldCount { get; set; } = 0;
+    public bool IsActive { get; set; } = true;
+    public bool IsFeatured { get; set; } = false;
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+
+    // ── Computed ──────────────────────────────────────────────────────────────
+
+    // The price customers actually pay
+    public decimal EffectivePrice => DiscountedPrice ?? Price;
+
+    // % discount shown on the UI (null if no discount)
+    public decimal? DiscountPercentage => DiscountedPrice.HasValue && Price > 0
+        ? Math.Round((1 - DiscountedPrice.Value / Price) * 100, 0)
+        : null;
+
+    // How many units can still be added to cart
+    public int AvailableStock => Math.Max(0, StockQuantity - ReservedQuantity);
+
+    // ── Navigation ────────────────────────────────────────────────────────────
+    public ICollection<CartItem> CartItems { get; set; }
+        = new List<CartItem>();
+    public ICollection<OrderItem> OrderItems { get; set; }
+        = new List<OrderItem>();
+    public ICollection<ProductReview> Reviews { get; set; }
+        = new List<ProductReview>();
+    public ICollection<Wishlist> WishlistItems { get; set; }
+        = new List<Wishlist>();
+    public ICollection<StockReservation> StockReservations { get; set; }
+        = new List<StockReservation>();
+    public ElasticStore? ElasticStoreEntry { get; set; }
+}
+
+
+===== FILE: src/EcommerceApp.Domain/Common/PagedResult.cs =====
+namespace EcommerceApp.Domain.Common;
+
+public class PagedResult<T>
+{
+    public IReadOnlyList<T> Items { get; }
+    public int TotalCount { get; }
+    public int PageNumber { get; }
+    public int PageSize { get; }
+    public int TotalPages => PageSize > 0
+        ? (int)Math.Ceiling(TotalCount / (double)PageSize)
+        : 0;
+    public bool HasNextPage => PageNumber < TotalPages;
+    public bool HasPreviousPage => PageNumber > 1;
+    public bool IsEmpty => !Items.Any();
+
+    public PagedResult(IReadOnlyList<T> items, int totalCount, int pageNumber, int pageSize)
+    {
+        Items = items;
+        TotalCount = totalCount;
+        PageNumber = pageNumber;
+        PageSize = pageSize;
+    }
+
+    // ── Factory methods ───────────────────────────────────────────────────────
+
+    public static PagedResult<T> Create(
+        IReadOnlyList<T> items,
+        int totalCount,
+        int pageNumber,
+        int pageSize)
+        => new(items, totalCount, pageNumber, pageSize);
+
+    public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 10)
+        => new(new List<T>(), 0, pageNumber, pageSize);
+
+    // ── Projection helper ─────────────────────────────────────────────────────
+
+    public PagedResult<TOut> Map<TOut>(Func<T, TOut> mapper)
+        => new(Items.Select(mapper).ToList(), TotalCount, PageNumber, PageSize);
+
+    //public static PagedResult<T> Empty(int pageNumber = 1, int pageSize = 20)
+    //=> new(new List<T>(), 0, pageNumber, pageSize);
+}
+
+
+===== FILE: frontend/src/api/axiosInstance.js =====
+import axios from 'axios';
+import { store } from '../store/store.js';
+import { setCredentials, logout } from '../store/slices/authSlice.js';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://localhost:7262';
+
+const axiosInstance = axios.create({
+  baseURL: BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// â”€â”€ Request interceptor: attach access token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+axiosInstance.interceptors.request.use(
+  (config) => {
+    const state = store.getState();
+    const token = state.auth.accessToken;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// â”€â”€ Response interceptor: silent token refresh on 401 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
+axiosInstance.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Don't retry refresh endpoint itself or already-retried requests
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !originalRequest.url.includes('/auth/refresh') &&
+      !originalRequest.url.includes('/auth/login')
+    ) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return axiosInstance(originalRequest);
+          })
+          .catch((err) => Promise.reject(err));
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const state = store.getState();
+      const { accessToken, refreshToken } = state.auth;
+
+      try {
+        const response = await axios.post(
+          `${BASE_URL}/api/v1/auth/refresh`,
+          { accessToken, refreshToken },
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+
+        const { accessToken: newAccessToken, refreshToken: newRefreshToken,
+                accessTokenExpiresAt, refreshTokenExpiresAt } = response.data;
+
+        store.dispatch(
+          setCredentials({
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken,
+            accessTokenExpiresAt,
+            refreshTokenExpiresAt,
+          })
+        );
+
+        processQueue(null, newAccessToken);
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return axiosInstance(originalRequest);
+      } catch (refreshError) {
+        processQueue(refreshError, null);
+        store.dispatch(logout());
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+export default axiosInstance;
+
+
+===== FILE: frontend/src/api/authApi.js =====
+import axiosInstance from './axiosInstance.js';
+
+const AUTH_BASE = '/api/v1/auth';
+
+// â”€â”€ Signup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: { email, message }
+export const signupApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/signup`, data);
+
+// â”€â”€ Verify OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// purpose: 1 = EmailVerification, 2 = ForgotPassword (based on your OtpPurpose enum)
+// Response: { isAuthenticated, auth, passwordResetToken, message }
+export const verifyOtpApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/verify-otp`, data);
+
+// â”€â”€ Login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
+export const loginApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/login`, data);
+
+// â”€â”€ Logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: 204 No Content
+export const logoutApi = () =>
+  axiosInstance.post(`${AUTH_BASE}/logout`);
+
+// â”€â”€ Forgot Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: 200 or 204
+export const forgotPasswordApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/forgot-password`, data);
+
+// â”€â”€ Reset Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: 204 No Content
+export const resetPasswordApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/reset-password`, data);
+
+// â”€â”€ Refresh Token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
+export const refreshTokenApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/refresh`, data);
+
+// â”€â”€ Get Current User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Response: UserDto
+export const getMeApi = () =>
+  axiosInstance.get(`${AUTH_BASE}/me`);
+
+
+===== FILE: frontend/src/store/store.js =====
+import { configureStore } from '@reduxjs/toolkit';
+import authReducer from './slices/authSlice.js';
+
+export const store = configureStore({
+  reducer: {
+    auth: authReducer,
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: {
+        // Ignore date strings in auth state
+        ignoredPaths: ['auth.accessTokenExpiresAt', 'auth.refreshTokenExpiresAt'],
+      },
+    }),
+});
+
+
+===== FILE: frontend/src/store/slices/authSlice.js =====
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import {
+  loginApi,
+  logoutApi,
+  signupApi,
+  verifyOtpApi,
+  forgotPasswordApi,
+  resetPasswordApi,
+  getMeApi,
+} from '../../api/authApi.js';
+
+// â”€â”€ Helper: persist tokens to localStorage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const saveTokens = ({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }) => {
+  localStorage.setItem('accessToken', accessToken);
+  localStorage.setItem('refreshToken', refreshToken);
+  localStorage.setItem('accessTokenExpiresAt', accessTokenExpiresAt);
+  localStorage.setItem('refreshTokenExpiresAt', refreshTokenExpiresAt);
+};
+
+const clearTokens = () => {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('accessTokenExpiresAt');
+  localStorage.removeItem('refreshTokenExpiresAt');
+};
+
+// â”€â”€ Thunks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export const loginThunk = createAsyncThunk(
+  'auth/login',
+  async (credentials, { rejectWithValue }) => {
+    try {
+      const response = await loginApi(credentials);
+      return response.data;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Login failed'
+      );
+    }
+  }
+);
+
+export const signupThunk = createAsyncThunk(
+  'auth/signup',
+  async (userData, { rejectWithValue }) => {
+    try {
+      const response = await signupApi(userData);
+      return response.data; // { email, message }
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Signup failed'
+      );
+    }
+  }
+);
+
+export const verifyOtpThunk = createAsyncThunk(
+  'auth/verifyOtp',
+  async (otpData, { rejectWithValue }) => {
+    try {
+      const response = await verifyOtpApi(otpData);
+      return response.data; // { isAuthenticated, auth, passwordResetToken, message }
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'OTP verification failed'
+      );
+    }
+  }
+);
+
+export const logoutThunk = createAsyncThunk(
+  'auth/logout',
+  async (_, { rejectWithValue }) => {
+    try {
+      await logoutApi();
+    } catch (err) {
+      // Always clear locally even if server call fails
+    }
+  }
+);
+
+export const forgotPasswordThunk = createAsyncThunk(
+  'auth/forgotPassword',
+  async (data, { rejectWithValue }) => {
+    try {
+      await forgotPasswordApi(data);
+      return true;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Request failed'
+      );
+    }
+  }
+);
+
+export const resetPasswordThunk = createAsyncThunk(
+  'auth/resetPassword',
+  async (data, { rejectWithValue }) => {
+    try {
+      await resetPasswordApi(data);
+      return true;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Reset failed'
+      );
+    }
+  }
+);
+
+export const fetchCurrentUserThunk = createAsyncThunk(
+  'auth/fetchCurrentUser',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await getMeApi();
+      return response.data;
+    } catch (err) {
+      return rejectWithValue('Session expired');
+    }
+  }
+);
+
+// â”€â”€ Initial State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const initialState = {
+  user: null,
+  accessToken: localStorage.getItem('accessToken') || null,
+  refreshToken: localStorage.getItem('refreshToken') || null,
+  accessTokenExpiresAt: localStorage.getItem('accessTokenExpiresAt') || null,
+  refreshTokenExpiresAt: localStorage.getItem('refreshTokenExpiresAt') || null,
+  isAuthenticated: !!localStorage.getItem('accessToken'),
+
+  // Signup flow: temporarily hold email for OTP step
+  pendingEmail: null,
+  // Forgot password flow: hold email for OTP step
+  pendingResetEmail: null,
+  // Reset password flow: hold token from OTP verify
+  passwordResetToken: null,
+
+  loading: false,
+  error: null,
+};
+
+// â”€â”€ Slice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const authSlice = createSlice({
+  name: 'auth',
+  initialState,
+  reducers: {
+    // Called by axios interceptor after silent refresh
+    // Inside authSlice reducers:
+    setPendingResetEmail: (state, action) => {
+        state.pendingResetEmail = action.payload;
+    },
+    setCredentials: (state, action) => {
+      const { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
+      state.accessToken = accessToken;
+      state.refreshToken = refreshToken;
+      state.accessTokenExpiresAt = accessTokenExpiresAt;
+      state.refreshTokenExpiresAt = refreshTokenExpiresAt;
+      saveTokens(action.payload);
+    },
+    logout: (state) => {
+      state.user = null;
+      state.accessToken = null;
+      state.refreshToken = null;
+      state.accessTokenExpiresAt = null;
+      state.refreshTokenExpiresAt = null;
+      state.isAuthenticated = false;
+      state.pendingEmail = null;
+      state.pendingResetEmail = null;
+      state.passwordResetToken = null;
+      state.error = null;
+      clearTokens();
+    },
+    clearError: (state) => {
+      state.error = null;
+    },
+    clearPendingState: (state) => {
+      state.pendingEmail = null;
+      state.pendingResetEmail = null;
+      state.passwordResetToken = null;
+    },
+  },
+  extraReducers: (builder) => {
+    // â”€â”€ Login â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(loginThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(loginThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        const { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
+        state.user = user;
+        state.accessToken = accessToken;
+        state.refreshToken = refreshToken;
+        state.accessTokenExpiresAt = accessTokenExpiresAt;
+        state.refreshTokenExpiresAt = refreshTokenExpiresAt;
+        state.isAuthenticated = true;
+        saveTokens({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt });
+      })
+      .addCase(loginThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // â”€â”€ Signup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(signupThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(signupThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        state.pendingEmail = action.payload.email;
+      })
+      .addCase(signupThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // â”€â”€ Verify OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(verifyOtpThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(verifyOtpThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        const { isAuthenticated, auth, passwordResetToken } = action.payload;
+        if (isAuthenticated && auth) {
+          state.user = auth.user;
+          state.accessToken = auth.accessToken;
+          state.refreshToken = auth.refreshToken;
+          state.accessTokenExpiresAt = auth.accessTokenExpiresAt;
+          state.refreshTokenExpiresAt = auth.refreshTokenExpiresAt;
+          state.isAuthenticated = true;
+          state.pendingEmail = null;
+          saveTokens({
+            accessToken: auth.accessToken,
+            refreshToken: auth.refreshToken,
+            accessTokenExpiresAt: auth.accessTokenExpiresAt,
+            refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
+          });
+        }
+        // Forgot password OTP flow â€” store reset token
+        if (passwordResetToken) {
+          state.passwordResetToken = passwordResetToken;
+          state.pendingResetEmail = null;
+        }
+      })
+      .addCase(verifyOtpThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // â”€â”€ Logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(logoutThunk.fulfilled, (state) => {
+        state.user = null;
+        state.accessToken = null;
+        state.refreshToken = null;
+        state.accessTokenExpiresAt = null;
+        state.refreshTokenExpiresAt = null;
+        state.isAuthenticated = false;
+        state.error = null;
+        clearTokens();
+      });
+
+    // â”€â”€ Forgot Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(forgotPasswordThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(forgotPasswordThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        // pendingResetEmail is set before dispatch in the component
+      })
+      .addCase(forgotPasswordThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // â”€â”€ Reset Password â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(resetPasswordThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(resetPasswordThunk.fulfilled, (state) => {
+        state.loading = false;
+        state.passwordResetToken = null;
+      })
+      .addCase(resetPasswordThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // â”€â”€ Fetch Current User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    builder
+      .addCase(fetchCurrentUserThunk.fulfilled, (state, action) => {
+        state.user = action.payload;
+        state.isAuthenticated = true;
+      })
+      .addCase(fetchCurrentUserThunk.rejected, (state) => {
+        state.user = null;
+        state.isAuthenticated = false;
+        clearTokens();
+      });
+  },
+});
+
+export const { setCredentials, logout, clearError, clearPendingState,setPendingResetEmail } = authSlice.actions;
+export default authSlice.reducer;
+
+// â”€â”€ Selectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export const selectCurrentUser = (state) => state.auth.user;
+export const selectIsAuthenticated = (state) => state.auth.isAuthenticated;
+export const selectAuthLoading = (state) => state.auth.loading;
+export const selectAuthError = (state) => state.auth.error;
+export const selectPendingEmail = (state) => state.auth.pendingEmail;
+export const selectPendingResetEmail = (state) => state.auth.pendingResetEmail;
+export const selectPasswordResetToken = (state) => state.auth.passwordResetToken;
+export const selectAccessToken = (state) => state.auth.accessToken;
+
+
+===== FILE: frontend/src/routes/AppRouter.jsx =====
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import { selectIsAuthenticated } from '../store/slices/authSlice.js';
+import ProtectedRoute from './ProtectedRoute.jsx';
+
+import LoginPage from '../pages/LoginPage.jsx';
+import SignupPage from '../pages/SignupPage.jsx';
+import VerifyOtpPage from '../pages/VerifyOtpPage.jsx';
+import ForgotPasswordPage from '../pages/ForgotPasswordPage.jsx';
+import ResetPasswordPage from '../pages/ResetPasswordPage.jsx';
+
+// Placeholder pages â€” will be replaced as we build them out
+const HomePage = () => <div className="p-5 text-center"><h2>Home Page (Coming Soon)</h2></div>;
+const DashboardPage = () => <div className="p-5 text-center"><h2>Dashboard (Protected)</h2></div>;
+
+// Redirect authenticated users away from auth pages
+const GuestRoute = ({ children }) => {
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+  return isAuthenticated ? <Navigate to="/" replace /> : children;
+};
+
+const AppRouter = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* Public routes */}
+        <Route path="/" element={<HomePage />} />
+
+        {/* Auth routes â€” redirect away if already logged in */}
+        <Route
+          path="/auth/login"
+          element={
+            <GuestRoute>
+              <LoginPage />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/auth/signup"
+          element={
+            <GuestRoute>
+              <SignupPage />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/auth/verify-otp"
+          element={<VerifyOtpPage />}
+        />
+        <Route
+          path="/auth/forgot-password"
+          element={
+            <GuestRoute>
+              <ForgotPasswordPage />
+            </GuestRoute>
+          }
+        />
+        <Route
+          path="/auth/reset-password"
+          element={<ResetPasswordPage />}
+        />
+
+        {/* Protected routes */}
+        <Route
+          path="/dashboard"
+          element={
+            <ProtectedRoute>
+              <DashboardPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Catch-all */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+};
+
+export default AppRouter;
+
+
+===== FILE: frontend/src/App.jsx =====
+import { ToastContainer } from 'react-toastify';
+import AppRouter from './routes/AppRouter.jsx';
+import { useTokenRefresh } from './hooks/useTokenRefresh.js';
+import './App.css';
+
+function App() {
+  useTokenRefresh();
+
+  return (
+    <>
+      <AppRouter />
+      <ToastContainer
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="colored"
+      />
+    </>
+  );
+}
+
+export default App;
+
+
+===== FILE: frontend/package.json =====
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "@microsoft/signalr": "^8.0.7",
+    "@reduxjs/toolkit": "^2.3.0",
+    "@stripe/react-stripe-js": "^2.9.0",
+    "@stripe/stripe-js": "^4.10.0",
+    "axios": "^1.7.9",
+    "bootstrap": "^5.3.3",
+    "date-fns": "^4.1.0",
+    "react": "^18.3.1",
+    "react-bootstrap": "^2.10.6",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.0",
+    "react-icons": "^5.4.0",
+    "react-image-gallery": "^1.3.0",
+    "react-redux": "^9.1.2",
+    "react-router-dom": "^6.28.0",
+    "react-slick": "^0.30.2",
+    "react-toastify": "^10.0.6",
+    "sass": "^1.83.0",
+    "slick-carousel": "^1.8.1",
+    "yup": "^1.4.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "globals": "^15.12.0",
+    "vite": "^5.4.0"
+  }
+}
+
+

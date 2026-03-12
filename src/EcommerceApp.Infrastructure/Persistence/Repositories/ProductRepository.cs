@@ -82,17 +82,41 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
         // ── Sorting ───────────────────────────────────────────────────────────
         // EF Core translates (DiscountedPrice ?? Price) → COALESCE(DiscountedPrice, Price)
-        query = sortBy?.ToLower() switch
+        //query = sortBy?.ToLower() switch
+        //{
+        //    "price-asc" => query.OrderBy(p => p.DiscountedPrice ?? p.Price),
+        //    "price-desc" => query.OrderByDescending(p => p.DiscountedPrice ?? p.Price),
+        //    "rating" => query.OrderByDescending(p => p.AverageRating),
+        //    "popular" => query.OrderByDescending(p => p.SoldCount),
+        //    "oldest" => query.OrderBy(p => p.CreatedAt),
+        //    _ => query.OrderByDescending(p => p.CreatedAt)     // default: newest
+        //};
+        IOrderedQueryable<Product> orderedQuery = sortBy?.ToLower() switch
         {
-            "price-asc" => query.OrderBy(p => p.DiscountedPrice ?? p.Price),
-            "price-desc" => query.OrderByDescending(p => p.DiscountedPrice ?? p.Price),
-            "rating" => query.OrderByDescending(p => p.AverageRating),
-            "popular" => query.OrderByDescending(p => p.SoldCount),
-            "oldest" => query.OrderBy(p => p.CreatedAt),
-            _ => query.OrderByDescending(p => p.CreatedAt)     // default: newest
+            "price" => sortDescending
+                ? query.OrderByDescending(p => p.DiscountedPrice ?? p.Price)
+                : query.OrderBy(p => p.DiscountedPrice ?? p.Price),
+
+            "rating" => sortDescending
+                ? query.OrderByDescending(p => p.AverageRating)
+                : query.OrderBy(p => p.AverageRating),
+
+            "soldcount" => sortDescending
+                ? query.OrderByDescending(p => p.SoldCount)
+                : query.OrderBy(p => p.SoldCount),
+
+            "createdat" => sortDescending
+                ? query.OrderByDescending(p => p.CreatedAt)
+                : query.OrderBy(p => p.CreatedAt),
+
+            "name" => sortDescending
+                ? query.OrderByDescending(p => p.Name)
+                : query.OrderBy(p => p.Name),
+
+            _ => query.OrderByDescending(p => p.CreatedAt)
         };
 
-        var items = await query
+        var items = await orderedQuery
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
