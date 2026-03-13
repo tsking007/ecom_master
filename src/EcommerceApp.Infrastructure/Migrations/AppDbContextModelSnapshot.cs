@@ -347,6 +347,61 @@ namespace EcommerceApp.Infrastructure.Migrations
                     b.ToTable("ElasticStores", (string)null);
                 });
 
+            modelBuilder.Entity("EcommerceApp.Domain.Entities.IdempotencyRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ResponseJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("StripeSessionId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("IX_IdempotencyRecords_ExpiresAt");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("IdempotencyKey", "UserId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_IdempotencyRecords_Key_User");
+
+                    b.ToTable("IdempotencyRecords", (string)null);
+                });
+
             modelBuilder.Entity("EcommerceApp.Domain.Entities.NotificationLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -782,9 +837,6 @@ namespace EcommerceApp.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IsDeleted")
-                        .HasDatabaseName("IX_Products_IsDeleted");
-
                     b.HasIndex("Slug")
                         .IsUnique()
                         .HasDatabaseName("IX_Products_Slug");
@@ -1118,9 +1170,6 @@ namespace EcommerceApp.Infrastructure.Migrations
                     b.HasIndex("IsActive")
                         .HasDatabaseName("IX_Users_IsActive");
 
-                    b.HasIndex("IsDeleted")
-                        .HasDatabaseName("IX_Users_IsDeleted");
-
                     b.HasIndex("PhoneNumber")
                         .IsUnique()
                         .HasDatabaseName("IX_Users_PhoneNumber")
@@ -1169,8 +1218,7 @@ namespace EcommerceApp.Infrastructure.Migrations
 
                     b.HasIndex("UserId", "ProductId")
                         .IsUnique()
-                        .HasDatabaseName("IX_Wishlists_UserId_ProductId")
-                        .HasFilter("[IsDeleted] = 0");
+                        .HasDatabaseName("IX_Wishlists_UserId_ProductId");
 
                     b.ToTable("Wishlists", (string)null);
                 });
@@ -1225,6 +1273,17 @@ namespace EcommerceApp.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("EcommerceApp.Domain.Entities.IdempotencyRecord", b =>
+                {
+                    b.HasOne("EcommerceApp.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("EcommerceApp.Domain.Entities.NotificationLog", b =>

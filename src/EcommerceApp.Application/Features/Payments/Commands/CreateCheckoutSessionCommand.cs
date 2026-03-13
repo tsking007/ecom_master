@@ -11,7 +11,10 @@ using System.Text.Json;
 
 namespace EcommerceApp.Application.Features.Payments.Commands;
 
-public record CreateCheckoutSessionCommand(Guid? AddressId = null)
+// ✅ IdempotencyKey added to the command record
+public record CreateCheckoutSessionCommand(
+    Guid? AddressId = null,
+    string? IdempotencyKey = null)
     : IRequest<CheckoutSessionResponseDto>;
 
 public class CreateCheckoutSessionCommandHandler
@@ -22,19 +25,22 @@ public class CreateCheckoutSessionCommandHandler
     private readonly IStripePaymentService _stripePaymentService;
     private readonly StripeSettings _stripeSettings;
     private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
+    private readonly IIdempotencyService _idempotencyService; // ✅ NEW
 
     public CreateCheckoutSessionCommandHandler(
         IUnitOfWork unitOfWork,
         ICurrentUserService currentUserService,
         IStripePaymentService stripePaymentService,
         IOptions<StripeSettings> stripeOptions,
-        ICheckoutTransactionExecutor checkoutTransactionExecutor)
+        ICheckoutTransactionExecutor checkoutTransactionExecutor,
+        IIdempotencyService idempotencyService) // ✅ NEW
     {
         _unitOfWork = unitOfWork;
         _currentUserService = currentUserService;
         _stripePaymentService = stripePaymentService;
         _stripeSettings = stripeOptions.Value;
         _checkoutTransactionExecutor = checkoutTransactionExecutor;
+        _idempotencyService = idempotencyService; // ✅ NEW
     }
 
     public async Task<CheckoutSessionResponseDto> Handle(
@@ -44,14 +50,29 @@ public class CreateCheckoutSessionCommandHandler
         var userId = _currentUserService.UserId
             ?? throw new UnauthorizedException("User is not authenticated.");
 
+        // ✅ IDEMPOTENCY CHECK — runs before any expensive work
+        // If this key was already processed successfully, return the cached
+        // response immediately. No Stripe call, no DB write, no stock change.
+        if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        {
+            var cached = await _idempotencyService.GetExistingResponseAsync(
+                request.IdempotencyKey,
+                userId,
+                cancellationToken);
+
+            if (cached is not null)
+                return cached;
+        }
+
+        // -- Everything below is unchanged from your original code ------------
+
         var user = await _unitOfWork.Users.GetWithAddressesAsync(userId, cancellationToken)
             ?? throw new NotFoundException("User", userId);
 
         var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken)
             ?? throw new ValidationException("Cart is empty.");
 
-        var activeItems = cart.Items
-            .ToList();
+        var activeItems = cart.Items.ToList();
 
         if (activeItems.Count == 0)
             throw new ValidationException("Cart is empty.");
@@ -66,10 +87,9 @@ public class CreateCheckoutSessionCommandHandler
                     $"Product '{item.Product.Name}' is inactive and cannot be checked out.");
 
             if (item.Quantity > item.Product.AvailableStock)
-            {
                 throw new ValidationException(
-                    $"Insufficient stock for '{item.Product.Name}'. Requested {item.Quantity}, available {item.Product.AvailableStock}.");
-            }
+                    $"Insufficient stock for '{item.Product.Name}'. " +
+                    $"Requested {item.Quantity}, available {item.Product.AvailableStock}.");
         }
 
         var address = request.AddressId.HasValue
@@ -147,8 +167,7 @@ public class CreateCheckoutSessionCommandHandler
         return await _checkoutTransactionExecutor.ExecuteAsync(async ct =>
         {
             var stripeSession = await _stripePaymentService.CreateCheckoutSessionAsync(
-                stripeRequest,
-                ct);
+                stripeRequest, ct);
 
             order.StripeSessionId = stripeSession.SessionId;
             order.StripePaymentIntentId = stripeSession.PaymentIntentId;
@@ -176,13 +195,28 @@ public class CreateCheckoutSessionCommandHandler
             cart.LastActivityAt = DateTime.UtcNow;
             await _unitOfWork.Carts.UpdateAsync(cart, ct);
 
-            return new CheckoutSessionResponseDto
+            var response = new CheckoutSessionResponseDto
             {
                 OrderId = order.Id,
                 OrderNumber = order.OrderNumber,
                 SessionId = stripeSession.SessionId,
                 SessionUrl = stripeSession.SessionUrl
             };
+
+            // ✅ Store the idempotency record inside the SAME transaction.
+            // If anything above fails and rolls back, this record is also
+            // rolled back — so a failed attempt never blocks a valid retry.
+            if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            {
+                await _idempotencyService.StoreResponseAsync(
+                    request.IdempotencyKey,
+                    userId,
+                    stripeSession.SessionId,
+                    response,
+                    ct);
+            }
+
+            return response;
         }, cancellationToken);
     }
 

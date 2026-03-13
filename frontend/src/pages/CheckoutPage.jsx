@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -16,7 +16,7 @@ import {
   selectHasOutOfStockItems,
 } from '../store/slices/cartSlice.js';
 import { getAddressesApi, addAddressApi } from '../api/addressApi.js';
-import { createCheckoutSessionApi } from '../api/paymentsApi.js';
+import { createCheckoutSessionApi,generateIdempotencyKey } from '../api/paymentsApi.js';
 
 const PLACEHOLDER = 'https://placehold.co/60x60?text=?';
 
@@ -49,6 +49,8 @@ const CheckoutPage = () => {
   const [addressForm, setAddressForm] = useState(EMPTY_ADDRESS_FORM);
   const [savingAddress, setSavingAddress] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
+
+  const idempotencyKeyRef = useRef(generateIdempotencyKey());
 
   // Redirect if cart is empty or has out-of-stock items
   useEffect(() => {
@@ -113,12 +115,19 @@ const CheckoutPage = () => {
     }
     setPlacingOrder(true);
     try {
-      const res = await createCheckoutSessionApi(selectedAddressId || null);
+      // ✅ Pass the stable key — if this call fails and the user clicks again,
+      // the exact same key is sent, so the backend returns the cached session
+      // instead of creating a duplicate order + Stripe session.
+      const res = await createCheckoutSessionApi(
+        selectedAddressId || null,
+        idempotencyKeyRef.current
+      );
       const { sessionUrl } = res.data;
-      // Redirect to Stripe Checkout
       window.location.href = sessionUrl;
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to create checkout session');
+      // ✅ Do NOT regenerate the key on error — reusing the same key on the
+      // next click is exactly what idempotency is designed for.
       setPlacingOrder(false);
     }
   };

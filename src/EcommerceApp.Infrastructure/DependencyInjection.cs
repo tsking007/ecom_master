@@ -48,6 +48,8 @@ public static class DependencyInjection
 
         services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
 
+        services.AddScoped<IIdempotencyService, IdempotencyService>();
+
         return services;
     }
 

@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
     public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

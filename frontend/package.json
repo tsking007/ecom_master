@@ -30,6 +30,7 @@
     "react-toastify": "^10.0.6",
     "sass": "^1.83.0",
     "slick-carousel": "^1.8.1",
+    "uuid": "^13.0.0",
     "yup": "^1.4.0"
   },
   "devDependencies": {

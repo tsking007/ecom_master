@@ -1,0 +1,1448 @@
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Payments/Commands/CreateCheckoutSessionCommand.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Exceptions;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Features.Payments.DTOs;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Enums;
+using EcommerceApp.Domain.Interfaces;
+using MediatR;
+using Microsoft.Extensions.Options;
+using System.Text.Json;
+
+namespace EcommerceApp.Application.Features.Payments.Commands;
+
+public record CreateCheckoutSessionCommand(Guid? AddressId = null)
+    : IRequest<CheckoutSessionResponseDto>;
+
+public class CreateCheckoutSessionCommandHandler
+    : IRequestHandler<CreateCheckoutSessionCommand, CheckoutSessionResponseDto>
+{
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICurrentUserService _currentUserService;
+    private readonly IStripePaymentService _stripePaymentService;
+    private readonly StripeSettings _stripeSettings;
+    private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
+
+    public CreateCheckoutSessionCommandHandler(
+        IUnitOfWork unitOfWork,
+        ICurrentUserService currentUserService,
+        IStripePaymentService stripePaymentService,
+        IOptions<StripeSettings> stripeOptions,
+        ICheckoutTransactionExecutor checkoutTransactionExecutor)
+    {
+        _unitOfWork = unitOfWork;
+        _currentUserService = currentUserService;
+        _stripePaymentService = stripePaymentService;
+        _stripeSettings = stripeOptions.Value;
+        _checkoutTransactionExecutor = checkoutTransactionExecutor;
+    }
+
+    public async Task<CheckoutSessionResponseDto> Handle(
+        CreateCheckoutSessionCommand request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+            ?? throw new UnauthorizedException("User is not authenticated.");
+
+        var user = await _unitOfWork.Users.GetWithAddressesAsync(userId, cancellationToken)
+            ?? throw new NotFoundException("User", userId);
+
+        var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken)
+            ?? throw new ValidationException("Cart is empty.");
+
+        var activeItems = cart.Items
+            .ToList();
+
+        if (activeItems.Count == 0)
+            throw new ValidationException("Cart is empty.");
+
+        foreach (var item in activeItems)
+        {
+            if (item.Product == null)
+                throw new NotFoundException("Product", item.ProductId);
+
+            if (!item.Product.IsActive)
+                throw new ValidationException(
+                    $"Product '{item.Product.Name}' is inactive and cannot be checked out.");
+
+            if (item.Quantity > item.Product.AvailableStock)
+            {
+                throw new ValidationException(
+                    $"Insufficient stock for '{item.Product.Name}'. Requested {item.Quantity}, available {item.Product.AvailableStock}.");
+            }
+        }
+
+        var address = request.AddressId.HasValue
+            ? user.Addresses.FirstOrDefault(a => a.Id == request.AddressId.Value)
+            : user.Addresses.FirstOrDefault(a => a.IsDefault);
+
+        if (address == null)
+            throw new ValidationException("A valid shipping address is required for checkout.");
+
+        var subTotal = activeItems.Sum(x => x.Product.EffectivePrice * x.Quantity);
+        var totalAmount = subTotal;
+
+        var orderNumber = await _unitOfWork.Orders.GenerateOrderNumberAsync(cancellationToken);
+
+        var addressSnapshot = JsonSerializer.Serialize(new
+        {
+            address.Id,
+            address.FullName,
+            address.PhoneNumber,
+            address.AddressLine1,
+            address.AddressLine2,
+            address.City,
+            address.State,
+            address.PostalCode,
+            address.Country,
+            address.AddressType
+        });
+
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            OrderNumber = orderNumber,
+            SubTotal = subTotal,
+            DiscountAmount = 0,
+            ShippingAmount = 0,
+            TaxAmount = 0,
+            TotalAmount = totalAmount,
+            PaymentStatus = PaymentStatus.Pending,
+            TrackingStatus = TrackingStatus.Placed,
+            ShippingAddressSnapshot = addressSnapshot,
+            EstimatedDeliveryDate = DateTime.UtcNow.AddDays(7),
+            Items = activeItems.Select(item => new OrderItem
+            {
+                ProductId = item.ProductId,
+                ProductName = item.Product.Name,
+                ProductImageUrl = item.Product.ImageUrls.FirstOrDefault(),
+                ProductSlug = item.Product.Slug,
+                UnitPrice = item.Product.Price,
+                DiscountedUnitPrice = item.Product.DiscountedPrice,
+                Quantity = item.Quantity,
+                TotalPrice = item.Product.EffectivePrice * item.Quantity
+            }).ToList()
+        };
+
+        var stripeRequest = new StripeCheckoutSessionRequest(
+            CustomerEmail: user.Email,
+            Currency: _stripeSettings.Currency,
+            SuccessUrl: _stripeSettings.SuccessUrl,
+            CancelUrl: _stripeSettings.CancelUrl,
+            Items: activeItems.Select(item => new StripeCheckoutLineItem(
+                Name: item.Product.Name,
+                Description: item.Product.ShortDescription,
+                ImageUrl: item.Product.ImageUrls.FirstOrDefault(),
+                UnitAmount: ToStripeAmount(item.Product.EffectivePrice),
+                Quantity: item.Quantity
+            )).ToList(),
+            Metadata: new Dictionary<string, string>
+            {
+                ["orderId"] = order.Id.ToString(),
+                ["orderNumber"] = order.OrderNumber,
+                ["userId"] = userId.ToString()
+            });
+
+        return await _checkoutTransactionExecutor.ExecuteAsync(async ct =>
+        {
+            var stripeSession = await _stripePaymentService.CreateCheckoutSessionAsync(
+                stripeRequest,
+                ct);
+
+            order.StripeSessionId = stripeSession.SessionId;
+            order.StripePaymentIntentId = stripeSession.PaymentIntentId;
+
+            await _unitOfWork.Orders.AddAsync(order, ct);
+
+            foreach (var item in activeItems)
+            {
+                item.Product.ReservedQuantity += item.Quantity;
+                await _unitOfWork.Products.UpdateAsync(item.Product, ct);
+
+                var reservation = new StockReservation
+                {
+                    ProductId = item.ProductId,
+                    UserId = userId,
+                    Quantity = item.Quantity,
+                    StripeSessionId = stripeSession.SessionId,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(30),
+                    IsReleased = false
+                };
+
+                await _unitOfWork.StockReservations.AddAsync(reservation, ct);
+            }
+
+            cart.LastActivityAt = DateTime.UtcNow;
+            await _unitOfWork.Carts.UpdateAsync(cart, ct);
+
+            return new CheckoutSessionResponseDto
+            {
+                OrderId = order.Id,
+                OrderNumber = order.OrderNumber,
+                SessionId = stripeSession.SessionId,
+                SessionUrl = stripeSession.SessionUrl
+            };
+        }, cancellationToken);
+    }
+
+    private static long ToStripeAmount(decimal amount)
+        => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Payments/StripePaymentService.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Common.Interfaces;
+using Microsoft.Extensions.Options;
+using Stripe.Checkout;
+
+namespace EcommerceApp.Infrastructure.Payments;
+
+public class StripePaymentService : IStripePaymentService
+{
+    private readonly StripeSettings _settings;
+
+    public StripePaymentService(IOptions<StripeSettings> options)
+    {
+        _settings = options.Value;
+    }
+
+    public async Task<StripeCheckoutSessionResult> CreateCheckoutSessionAsync(
+        StripeCheckoutSessionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var service = new SessionService();
+
+        var options = new SessionCreateOptions
+        {
+            Mode = "payment",
+            SuccessUrl = request.SuccessUrl,
+            CancelUrl = request.CancelUrl,
+            CustomerEmail = request.CustomerEmail,
+            Currency = request.Currency.ToLowerInvariant(),
+            PaymentMethodTypes = new List<string> { "card" },
+            LineItems = request.Items.Select(item => new SessionLineItemOptions
+            {
+                Quantity = item.Quantity,
+                PriceData = new SessionLineItemPriceDataOptions
+                {
+                    Currency = request.Currency.ToLowerInvariant(),
+                    UnitAmount = item.UnitAmount,
+                    ProductData = new SessionLineItemPriceDataProductDataOptions
+                    {
+                        Name = item.Name,
+                        Description = item.Description,
+                        Images = string.IsNullOrWhiteSpace(item.ImageUrl)
+                            ? null
+                            : new List<string> { item.ImageUrl }
+                    }
+                }
+            }).ToList(),
+            Metadata = request.Metadata,
+            PaymentIntentData = new SessionPaymentIntentDataOptions
+            {
+                Metadata = request.Metadata
+            }
+        };
+
+        var session = await service.CreateAsync(
+            options,
+            requestOptions: null,
+            cancellationToken: cancellationToken);
+
+        return new StripeCheckoutSessionResult(
+            SessionId: session.Id,
+            SessionUrl: session.Url!,
+            PaymentIntentId: session.PaymentIntentId);
+    }
+
+    public async Task<StripeCheckoutSessionStatusResult> GetSessionStatusAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var service = new SessionService();
+
+        var session = await service.GetAsync(
+            sessionId,
+            requestOptions: null,
+            cancellationToken: cancellationToken);
+
+        return new StripeCheckoutSessionStatusResult(
+            SessionId: session.Id,
+            SessionStatus: session.Status,
+            PaymentStatus: session.PaymentStatus,
+            PaymentIntentId: session.PaymentIntentId);
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/PaymentsController.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Application.Features.Payments.Commands;
+using EcommerceApp.Application.Features.Payments.DTOs;
+using EcommerceApp.Application.Features.Payments.Queries;
+using EcommerceApp.Infrastructure.Payments;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using Stripe;
+using Stripe.Checkout;
+using System.Text;
+
+namespace EcommerceApp.API.Controllers.v1;
+
+[ApiController]
+[Route("api/v1/payments")]
+public class PaymentsController : ControllerBase
+{
+    private readonly ISender _sender;
+    private readonly StripeSettings _stripeSettings;
+    private readonly ILogger<PaymentsController> _logger;
+
+    public PaymentsController(
+        ISender sender,
+        IOptions<StripeSettings> stripeOptions,
+        ILogger<PaymentsController> logger)
+    {
+        _sender = sender;
+        _stripeSettings = stripeOptions.Value;
+        _logger = logger;
+    }
+
+    [HttpPost("create-checkout-session")]
+    [Authorize]
+    [ProducesResponseType(typeof(CheckoutSessionResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<CheckoutSessionResponseDto>> CreateCheckoutSession(
+        [FromBody] CreateCheckoutSessionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _sender.Send(
+            new CreateCheckoutSessionCommand(request.AddressId),
+            cancellationToken);
+
+        return Ok(result);
+    }
+
+    [HttpGet("session/{sessionId}")]
+    [Authorize]
+    [ProducesResponseType(typeof(CheckoutSessionStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<CheckoutSessionStatusDto>> GetSessionStatus(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _sender.Send(
+            new GetCheckoutSessionStatusQuery(sessionId),
+            cancellationToken);
+
+        return Ok(result);
+    }
+
+    [HttpPost("webhook")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Webhook(CancellationToken cancellationToken)
+    {
+        var json = await new StreamReader(HttpContext.Request.Body, Encoding.UTF8)
+            .ReadToEndAsync(cancellationToken);
+
+        var signature = Request.Headers["Stripe-Signature"];
+
+        Event stripeEvent;
+        try
+        {
+            stripeEvent = EventUtility.ConstructEvent(
+                json,
+                signature,
+                _stripeSettings.WebhookSecret);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Invalid Stripe webhook signature.");
+            return BadRequest();
+        }
+
+        switch (stripeEvent.Type)
+        {
+            case "checkout.session.completed":
+                {
+                    var session = stripeEvent.Data.Object as Session;
+                    if (session != null)
+                    {
+                        await _sender.Send(
+                            new MarkCheckoutSessionCompletedCommand(
+                                session.Id,
+                                session.PaymentIntentId),
+                            cancellationToken);
+                    }
+                    break;
+                }
+
+            case "payment_intent.payment_failed":
+                {
+                    var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+                    if (paymentIntent != null &&
+                        paymentIntent.Metadata.TryGetValue("orderId", out var orderIdRaw) &&
+                        Guid.TryParse(orderIdRaw, out var orderId))
+                    {
+                        await _sender.Send(
+                            new MarkPaymentFailedCommand(
+                                orderId,
+                                paymentIntent.Id,
+                                paymentIntent.LastPaymentError?.Message),
+                            cancellationToken);
+                    }
+                    break;
+                }
+
+            case "payment_intent.succeeded":
+                {
+                    var paymentIntent = stripeEvent.Data.Object as PaymentIntent;
+                    if (paymentIntent != null)
+                    {
+                        _logger.LogInformation(
+                            "Stripe payment_intent.succeeded received. PaymentIntentId={PaymentIntentId}",
+                            paymentIntent.Id);
+                    }
+                    break;
+                }
+
+            default:
+                _logger.LogInformation("Unhandled Stripe webhook event type: {EventType}", stripeEvent.Type);
+                break;
+        }
+
+        return Ok(new { received = true });
+    }
+
+    public class CreateCheckoutSessionRequest
+    {
+        public Guid? AddressId { get; set; }
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Application/Features/Payments/DTOs/CheckoutDtos.cs
+================================================================================
+
+namespace EcommerceApp.Application.Features.Payments.DTOs;
+
+public class CheckoutSessionResponseDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string SessionUrl { get; set; } = string.Empty;
+}
+
+public class CheckoutSessionStatusDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;          // paid | pending | failed
+    public string PaymentStatus { get; set; } = string.Empty;   // domain payment status
+    public string TrackingStatus { get; set; } = string.Empty;
+    public bool IsPaid { get; set; }
+    public string? StripeSessionStatus { get; set; }
+    public string? StripePaymentStatus { get; set; }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Order.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Enums;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Order : BaseEntity
+{
+    public Guid UserId { get; set; }
+
+    // Human-readable order reference e.g. "ORD-20240115-00034"
+    public string OrderNumber { get; set; } = string.Empty;
+
+    // -- Financials ------------------------------------------------------------
+    public decimal SubTotal { get; set; }
+    public decimal DiscountAmount { get; set; } = 0;
+    public decimal ShippingAmount { get; set; } = 0;
+    public decimal TaxAmount { get; set; } = 0;
+    public decimal TotalAmount { get; set; }
+
+    // -- Status ----------------------------------------------------------------
+    public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
+    public TrackingStatus TrackingStatus { get; set; } = TrackingStatus.Placed;
+
+    // -- Stripe ----------------------------------------------------------------
+    public string? StripeSessionId { get; set; }
+    public string? StripePaymentIntentId { get; set; }
+
+    // -- Optional fields -------------------------------------------------------
+    public string? CouponCode { get; set; }
+
+    // JSON-serialized snapshot of the Address at time of order placement.
+    // Stored as a plain JSON string so it survives address deletion/edits.
+    public string ShippingAddressSnapshot { get; set; } = string.Empty;
+
+    public string? Notes { get; set; }
+    public string? TrackingNumber { get; set; }
+    public DateTime? EstimatedDeliveryDate { get; set; }
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    public DateTime? ReturnRequestedAt { get; set; }
+    public string? ReturnReason { get; set; }
+
+    // -- Navigation ------------------------------------------------------------
+    public User User { get; set; } = null!;
+    public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Domain/Entities/Cart.cs
+================================================================================
+
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Cart : BaseEntity
+{
+    // One cart per user � enforced via unique index in EF config
+    public Guid UserId { get; set; }
+
+    // Updated on every add / update / remove action.
+    // Used by the CartReminderService to find idle carts.
+    public DateTime LastActivityAt { get; set; } = DateTime.UtcNow;
+
+    // -- Navigation ------------------------------------------------------------
+    public User User { get; set; } = null!;
+    public ICollection<CartItem> Items { get; set; } = new List<CartItem>();
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/CheckoutTransactionExecutor.cs
+================================================================================
+
+using EcommerceApp.Application.Common.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
+{
+    private readonly AppDbContext _dbContext;
+
+    public CheckoutTransactionExecutor(AppDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
+
+    public async Task<T> ExecuteAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken = default)
+    {
+        var strategy = _dbContext.Database.CreateExecutionStrategy();
+
+        return await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+            try
+            {
+                var result = await operation(cancellationToken);
+
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+
+                return result;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        });
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/AppDbContext.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using System.Reflection;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+public class AppDbContext : DbContext
+{
+    private readonly ICurrentUserService _currentUserService;
+
+    public AppDbContext(
+        DbContextOptions<AppDbContext> options,
+        ICurrentUserService currentUserService)
+        : base(options)
+    {
+        _currentUserService = currentUserService;
+    }
+
+    // -- DbSets ----------------------------------------------------------------
+    public DbSet<User> Users => Set<User>();
+    public DbSet<OtpStore> OtpStores => Set<OtpStore>();
+    public DbSet<TokenStore> TokenStores => Set<TokenStore>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<CartItem> CartItems => Set<CartItem>();
+    public DbSet<ElasticStore> ElasticStores => Set<ElasticStore>();
+    public DbSet<Cart> Carts => Set<Cart>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<Address> Addresses => Set<Address>();
+    public DbSet<Banner> Banners => Set<Banner>();
+    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
+    public DbSet<Wishlist> Wishlists => Set<Wishlist>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Scans this assembly and applies every IEntityTypeConfiguration<T> class.
+        // Each configuration is responsible for its own query filter,
+        // column types, indexes, and FK relationships.
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        base.OnModelCreating(modelBuilder);
+    }
+
+    // -- Audit field auto-population -------------------------------------------
+    public override async Task<int> SaveChangesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+        var userId = _currentUserService.UserId;
+
+        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.Entity.CreatedAt = now;
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.CreatedBy = userId;
+                    entry.Entity.UpdatedBy = userId;
+                    break;
+
+                case EntityState.Modified:
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.UpdatedBy = userId;
+                    // Never allow overwriting the original author / timestamp
+                    entry.Property(e => e.CreatedAt).IsModified = false;
+                    entry.Property(e => e.CreatedBy).IsModified = false;
+                    break;
+            }
+        }
+
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Infrastructure/DependencyInjection.cs
+================================================================================
+
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure.Auth;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Interfaces;
+using EcommerceApp.Infrastructure.BackgroundServices;
+using EcommerceApp.Infrastructure.Search;
+using Microsoft.Extensions.Options;
+using Nest;
+using EcommerceApp.Infrastructure.Payments;
+
+namespace EcommerceApp.Infrastructure;
+
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services
+            .AddDatabase(configuration)
+            .AddAuthServices(configuration)
+            .AddRepositories()
+            .AddNotifications(configuration)
+            .AddSearch(configuration)
+            .AddPayments(configuration);
+
+        return services;
+    }
+
+
+    //Payments
+    private static IServiceCollection AddPayments(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        services.Configure<StripeSettings>(
+            configuration.GetSection(StripeSettings.SectionName));
+
+        services.AddScoped<IStripePaymentService, StripePaymentService>();
+
+        services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
+
+        return services;
+    }
+
+    // -- Search ----------------------------------------------------------------
+
+    private static IServiceCollection AddSearch(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind SearchSettings section
+        services.Configure<SearchSettings>(
+            configuration.GetSection(SearchSettings.SectionName));
+
+        var provider = configuration
+            .GetSection(SearchSettings.SectionName)["Provider"] ?? "Sql";
+
+        //Console.WriteLine($"[Search] Provider from config = '{provider}'");
+
+        if (provider.Equals("Elasticsearch", StringComparison.OrdinalIgnoreCase))
+        {
+            // -- Elasticsearch -----------------------------------------------------
+            //Console.WriteLine("[Search] Registered ElasticsearchSearchService");
+            services.AddSingleton<IElasticClient>(sp =>
+            {
+                var settings = sp.GetRequiredService<IOptions<SearchSettings>>().Value;
+
+                var connectionSettings = new ConnectionSettings(new Uri(settings.Uri))
+                    .DefaultIndex(settings.IndexName)
+                    .EnableDebugMode()
+                    .PrettyJson();
+
+                // Add credentials only when configured (production)
+                if (!string.IsNullOrEmpty(settings.Username) &&
+                    !string.IsNullOrEmpty(settings.Password))
+                {
+                    connectionSettings.BasicAuthentication(
+                        settings.Username, settings.Password);
+                }
+
+                return new ElasticClient(connectionSettings);
+            });
+
+            services.AddScoped<ElasticsearchSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<ElasticsearchSearchService>());
+        }
+        else
+        {
+            //Console.WriteLine("[Search] Registered SqlSearchService");
+            // -- SQL fallback ------------------------------------------------------
+            services.AddScoped<SqlSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<SqlSearchService>());
+        }
+
+        // Background sync service � runs regardless of provider
+        // (SQL provider's SyncAllAsync is a no-op, so no wasted work)
+        services.AddHostedService<ProductSearchSyncService>();
+
+        return services;
+    }
+
+    private static IServiceCollection AddNotifications(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        // Bind "Notifications" section to NotificationSettings
+        services.Configure<NotificationSettings>(
+            configuration.GetSection(NotificationSettings.SectionName));
+
+        // Dev senders � log to console instead of calling real APIs.
+        // In Part 11/12 these are swapped for SendGrid and Twilio
+        // by checking IHostEnvironment.IsProduction() or a feature flag.
+        services.AddTransient<IEmailSender, DevEmailSender>();
+        services.AddTransient<ISmsSender, DevSmsSender>();
+
+        return services;
+    }
+
+    // -- Database --------------------------------------------------------------
+
+    private static IServiceCollection AddDatabase(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<AppDbContext>((sp, options) =>
+        {
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sqlOptions =>
+                {
+                    // Retry on transient SQL Server failures (e.g. brief network blips)
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(30),
+                        errorNumbersToAdd: null);
+
+                    sqlOptions.MigrationsAssembly(
+                        typeof(AppDbContext).Assembly.FullName);
+                });
+        });
+
+        return services;
+    }
+
+    // -- Auth services ---------------------------------------------------------
+
+    private static IServiceCollection AddAuthServices(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind "Jwt" section to JwtSettings
+        services.Configure<JwtSettings>(
+            configuration.GetSection(JwtSettings.SectionName));
+
+        // Singleton: stateless � all fields are readonly after construction.
+        // Safe to share across requests.
+        services.AddSingleton<ITokenService, JwtTokenService>();
+
+        // Singleton: stateless (only uses RandomNumberGenerator and BCrypt)
+        services.AddSingleton<IOtpService, OtpService>();
+
+        // Singleton: stateless (only uses BCrypt and Regex)
+        services.AddSingleton<IPasswordService, PasswordService>();
+
+        // Scoped: wraps ITokenStoreRepository and IUnitOfWork which are both scoped
+        services.AddScoped<SessionService>();
+
+        return services;
+    }
+
+    // -- Repositories ----------------------------------------------------------
+
+    private static IServiceCollection AddRepositories(
+        this IServiceCollection services)
+    {
+        // Unit of Work � scoped to the HTTP request
+        services.AddScoped<IUnitOfWork, Persistence.UnitOfWork>();
+
+        // Auth-specific repos � injected directly into handlers (not via UoW)
+        services.AddScoped<ITokenStoreRepository, TokenStoreRepository>();
+        services.AddScoped<IOtpStoreRepository, OtpStoreRepository>();
+
+        // Search repo � injected directly into search service and sync job
+        services.AddScoped<ISearchRepository, SearchRepository>();
+
+        services.AddScoped<IProductRepository, ProductRepository>();
+
+        // -- ADD this line inside the existing AddRepositories() method ----------------
+        services.AddScoped<IBannerRepository, BannerRepository>();
+
+        services.AddScoped<IRateLimitRepository, RateLimitRepository>();
+
+        services.AddScoped<IAddressRepository, AddressRepository>();
+        // NOTE: The remaining feature repositories are registered automatically
+        // through IUnitOfWork lazy initialization (Part 5 UnitOfWork.cs).
+        // Individual repos are only registered here when a handler injects
+        // them DIRECTLY instead of going through IUnitOfWork.
+
+        return services;
+    }
+}
+
+
+================================================================================
+FILE: src/EcommerceApp.Application/Common/Interfaces/IStripePaymentService.cs
+================================================================================
+
+namespace EcommerceApp.Application.Common.Interfaces;
+
+public interface IStripePaymentService
+{
+    Task<StripeCheckoutSessionResult> CreateCheckoutSessionAsync(
+        StripeCheckoutSessionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StripeCheckoutSessionStatusResult> GetSessionStatusAsync(
+        string sessionId,
+        CancellationToken cancellationToken = default);
+}
+
+public record StripeCheckoutSessionRequest(
+    string CustomerEmail,
+    string Currency,
+    string SuccessUrl,
+    string CancelUrl,
+    IReadOnlyList<StripeCheckoutLineItem> Items,
+    Dictionary<string, string>? Metadata = null);
+
+public record StripeCheckoutLineItem(
+    string Name,
+    string? Description,
+    string? ImageUrl,
+    long UnitAmount,
+    int Quantity);
+
+public record StripeCheckoutSessionResult(
+    string SessionId,
+    string SessionUrl,
+    string? PaymentIntentId);
+
+public record StripeCheckoutSessionStatusResult(
+    string SessionId,
+    string? SessionStatus,
+    string? PaymentStatus,
+    string? PaymentIntentId);
+
+
+================================================================================
+FILE: frontend/src/api/paymentsApi.js
+================================================================================
+
+import axiosInstance from './axiosInstance.js';
+
+const PAYMENTS_BASE = '/api/v1/payments';
+
+// POST /api/v1/payments/create-checkout-session
+// Body: { addressId: Guid | null }
+// Response: { orderId, orderNumber, sessionId, sessionUrl }
+export const createCheckoutSessionApi = (addressId) =>
+  axiosInstance.post(`${PAYMENTS_BASE}/create-checkout-session`, { addressId });
+
+// GET /api/v1/payments/session/{sessionId}
+// Response: CheckoutSessionStatusDto
+export const getSessionStatusApi = (sessionId) =>
+  axiosInstance.get(`${PAYMENTS_BASE}/session/${sessionId}`);
+
+// POST /api/v1/payments/mock/checkout-session-completed/{sessionId}
+export const mockConfirmSessionApi = (sessionId) =>
+  axiosInstance.post(`${PAYMENTS_BASE}/mock/checkout-session-completed/${sessionId}`);
+
+
+================================================================================
+FILE: frontend/src/pages/CheckoutPage.jsx
+================================================================================
+
+import { useEffect, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
+import {
+  Container, Row, Col, Card, Button, Spinner,
+  Alert, Form, Badge, Table, Image,
+} from 'react-bootstrap';
+import { FiMapPin, FiPlus, FiCheck, FiArrowLeft } from 'react-icons/fi';
+import { toast } from 'react-toastify';
+import AppNavbar from '../components/layout/Navbar.jsx';
+import Footer from '../components/layout/Footer.jsx';
+import {
+  selectCartItems,
+  selectCartSubtotal,
+  selectCartTotalItems,
+  selectHasOutOfStockItems,
+} from '../store/slices/cartSlice.js';
+import { getAddressesApi, addAddressApi } from '../api/addressApi.js';
+import { createCheckoutSessionApi } from '../api/paymentsApi.js';
+
+const PLACEHOLDER = 'https://placehold.co/60x60?text=?';
+
+const EMPTY_ADDRESS_FORM = {
+  fullName: '',
+  phoneNumber: '',
+  addressLine1: '',
+  addressLine2: '',
+  city: '',
+  state: '',
+  postalCode: '',
+  country: 'India',
+  addressType: 'Home',
+  isDefault: false,
+};
+
+const CheckoutPage = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+
+  const items = useSelector(selectCartItems);
+  const subtotal = useSelector(selectCartSubtotal);
+  const totalItems = useSelector(selectCartTotalItems);
+  const hasOutOfStock = useSelector(selectHasOutOfStockItems);
+
+  const [addresses, setAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
+  const [loadingAddresses, setLoadingAddresses] = useState(true);
+  const [showAddressForm, setShowAddressForm] = useState(false);
+  const [addressForm, setAddressForm] = useState(EMPTY_ADDRESS_FORM);
+  const [savingAddress, setSavingAddress] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
+
+  // Redirect if cart is empty or has out-of-stock items
+  useEffect(() => {
+    if (!items.length) {
+      navigate('/cart');
+    }
+  }, [items, navigate]);
+
+  useEffect(() => {
+    const loadAddresses = async () => {
+      try {
+        const res = await getAddressesApi();
+        setAddresses(res.data);
+        // Pre-select default address
+        const def = res.data.find((a) => a.isDefault) || res.data[0];
+        if (def) setSelectedAddressId(def.id);
+        // If no addresses, show the add form automatically
+        if (res.data.length === 0) setShowAddressForm(true);
+      } catch {
+        toast.error('Failed to load addresses');
+      } finally {
+        setLoadingAddresses(false);
+      }
+    };
+    loadAddresses();
+  }, []);
+
+  const handleAddressFormChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setAddressForm((prev) => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value,
+    }));
+  };
+
+  const handleSaveAddress = async (e) => {
+    e.preventDefault();
+    setSavingAddress(true);
+    try {
+      const res = await addAddressApi(addressForm);
+      const newAddr = res.data;
+      setAddresses((prev) => [...prev, newAddr]);
+      setSelectedAddressId(newAddr.id);
+      setShowAddressForm(false);
+      setAddressForm(EMPTY_ADDRESS_FORM);
+      toast.success('Address saved');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to save address');
+    } finally {
+      setSavingAddress(false);
+    }
+  };
+
+  const handlePlaceOrder = async () => {
+    if (!selectedAddressId && addresses.length > 0) {
+      toast.warning('Please select a delivery address');
+      return;
+    }
+    if (hasOutOfStock) {
+      toast.warning('Remove out-of-stock items before placing order');
+      return;
+    }
+    setPlacingOrder(true);
+    try {
+      const res = await createCheckoutSessionApi(selectedAddressId || null);
+      const { sessionUrl } = res.data;
+      // Redirect to Stripe Checkout
+      window.location.href = sessionUrl;
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to create checkout session');
+      setPlacingOrder(false);
+    }
+  };
+
+  if (loadingAddresses) {
+    return (
+      <>
+        <AppNavbar />
+        <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+          <Spinner animation="border" variant="primary" />
+        </div>
+        <Footer />
+      </>
+    );
+  }
+
+  return (
+    <div className="d-flex flex-column min-vh-100">
+      <AppNavbar />
+
+      <Container fluid="xl" className="py-4 flex-grow-1">
+        {/* Back to cart */}
+        <Button
+          variant="link"
+          className="text-muted p-0 mb-3 d-flex align-items-center gap-1"
+          onClick={() => navigate('/cart')}
+        >
+          <FiArrowLeft size={14} /> Back to Cart
+        </Button>
+
+        <h4 className="fw-bold mb-4">Checkout</h4>
+
+        <Row className="g-4">
+          {/* ── Left: Address Selection ──────────────────────────── */}
+          <Col lg={7}>
+            <Card className="border-0 shadow-sm mb-4">
+              <Card.Header className="bg-white fw-bold d-flex align-items-center gap-2">
+                <FiMapPin /> Delivery Address
+              </Card.Header>
+              <Card.Body>
+                {addresses.length > 0 && (
+                  <div className="mb-3">
+                    {addresses.map((addr) => (
+                      <div
+                        key={addr.id}
+                        className={`p-3 mb-2 rounded border cursor-pointer ${
+                          selectedAddressId === addr.id
+                            ? 'border-primary bg-primary bg-opacity-10'
+                            : 'border-light'
+                        }`}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setSelectedAddressId(addr.id)}
+                      >
+                        <div className="d-flex justify-content-between align-items-start">
+                          <div>
+                            <div className="d-flex align-items-center gap-2 mb-1">
+                              <strong>{addr.fullName}</strong>
+                              <Badge bg="secondary" pill style={{ fontSize: '0.65rem' }}>
+                                {addr.addressType}
+                              </Badge>
+                              {addr.isDefault && (
+                                <Badge bg="success" pill style={{ fontSize: '0.65rem' }}>
+                                  Default
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-muted small">
+                              {addr.addressLine1}
+                              {addr.addressLine2 && `, ${addr.addressLine2}`}
+                              <br />
+                              {addr.city}, {addr.state} — {addr.postalCode}
+                              <br />
+                              {addr.country}
+                            </div>
+                            <div className="text-muted small mt-1">📞 {addr.phoneNumber}</div>
+                          </div>
+                          {selectedAddressId === addr.id && (
+                            <FiCheck size={18} className="text-primary flex-shrink-0" />
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add new address toggle */}
+                {!showAddressForm ? (
+                  <Button
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={() => setShowAddressForm(true)}
+                    className="d-flex align-items-center gap-1"
+                  >
+                    <FiPlus size={14} /> Add New Address
+                  </Button>
+                ) : (
+                  <div className="border rounded p-3 mt-2">
+                    <h6 className="fw-bold mb-3">New Address</h6>
+                    <Form onSubmit={handleSaveAddress}>
+                      <Row className="g-2">
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">Full Name *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="fullName"
+                              value={addressForm.fullName}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">Phone Number *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="phoneNumber"
+                              value={addressForm.phoneNumber}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={12}>
+                          <Form.Group>
+                            <Form.Label className="small">Address Line 1 *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="addressLine1"
+                              value={addressForm.addressLine1}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={12}>
+                          <Form.Group>
+                            <Form.Label className="small">Address Line 2</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="addressLine2"
+                              value={addressForm.addressLine2}
+                              onChange={handleAddressFormChange}
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">City *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="city"
+                              value={addressForm.city}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">State *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="state"
+                              value={addressForm.state}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">Postal Code *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="postalCode"
+                              value={addressForm.postalCode}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">Country *</Form.Label>
+                            <Form.Control
+                              size="sm"
+                              name="country"
+                              value={addressForm.country}
+                              onChange={handleAddressFormChange}
+                              required
+                            />
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6}>
+                          <Form.Group>
+                            <Form.Label className="small">Address Type</Form.Label>
+                            <Form.Select
+                              size="sm"
+                              name="addressType"
+                              value={addressForm.addressType}
+                              onChange={handleAddressFormChange}
+                            >
+                              <option value="Home">Home</option>
+                              <option value="Work">Work</option>
+                              <option value="Other">Other</option>
+                            </Form.Select>
+                          </Form.Group>
+                        </Col>
+                        <Col sm={6} className="d-flex align-items-end">
+                          <Form.Check
+                            type="checkbox"
+                            name="isDefault"
+                            label="Set as default"
+                            checked={addressForm.isDefault}
+                            onChange={handleAddressFormChange}
+                            className="small"
+                          />
+                        </Col>
+                      </Row>
+                      <div className="d-flex gap-2 mt-3">
+                        <Button
+                          type="submit"
+                          variant="primary"
+                          size="sm"
+                          disabled={savingAddress}
+                        >
+                          {savingAddress ? <Spinner animation="border" size="sm" /> : 'Save Address'}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline-secondary"
+                          size="sm"
+                          onClick={() => {
+                            setShowAddressForm(false);
+                            setAddressForm(EMPTY_ADDRESS_FORM);
+                          }}
+                          disabled={savingAddress}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </Form>
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+          </Col>
+
+          {/* ── Right: Order Summary ─────────────────────────────── */}
+          <Col lg={5}>
+            <Card className="border-0 shadow-sm mb-3">
+              <Card.Header className="bg-white fw-bold">
+                Order Summary ({totalItems} item{totalItems !== 1 ? 's' : ''})
+              </Card.Header>
+              <Card.Body className="p-0">
+                {/* Item list */}
+                <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                  {items.map((item, idx) => (
+                    <div
+                      key={item.cartItemId}
+                      className={`px-3 py-2 d-flex align-items-center gap-3 ${
+                        idx < items.length - 1 ? 'border-bottom' : ''
+                      }`}
+                    >
+                      <Image
+                        src={item.mainImageUrl || PLACEHOLDER}
+                        alt={item.productName}
+                        rounded
+                        style={{ width: '48px', height: '48px', objectFit: 'cover', flexShrink: 0 }}
+                        onError={(e) => { e.target.src = PLACEHOLDER; }}
+                      />
+                      <div className="flex-grow-1 min-width-0">
+                        <div
+                          className="fw-semibold text-truncate small"
+                          style={{ maxWidth: '180px' }}
+                        >
+                          {item.productName}
+                        </div>
+                        <div className="text-muted" style={{ fontSize: '0.75rem' }}>
+                          Qty: {item.quantity}
+                        </div>
+                      </div>
+                      <div className="fw-semibold small text-nowrap">
+                        ₹{item.lineTotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Totals */}
+                <div className="px-3 py-3 border-top">
+                  <Table borderless size="sm" className="mb-0">
+                    <tbody>
+                      <tr>
+                        <td className="text-muted small">Subtotal</td>
+                        <td className="text-end small fw-semibold">
+                          ₹{subtotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="text-muted small">Shipping</td>
+                        <td className="text-end text-success small">Calculated by Stripe</td>
+                      </tr>
+                      <tr>
+                        <td colSpan={2}><hr className="my-1" /></td>
+                      </tr>
+                      <tr>
+                        <td className="fw-bold">Total (excl. shipping)</td>
+                        <td className="text-end fw-bold text-primary">
+                          ₹{subtotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </Table>
+                </div>
+              </Card.Body>
+            </Card>
+
+            {hasOutOfStock && (
+              <Alert variant="warning" className="py-2 small">
+                ⚠️ Your cart has out-of-stock items. Please go back and remove them.
+              </Alert>
+            )}
+
+            <div className="d-grid">
+              <Button
+                variant="success"
+                size="lg"
+                onClick={handlePlaceOrder}
+                disabled={
+                  placingOrder ||
+                  hasOutOfStock ||
+                  !items.length ||
+                  (addresses.length > 0 && !selectedAddressId)
+                }
+                className="d-flex align-items-center justify-content-center gap-2"
+              >
+                {placingOrder ? (
+                  <><Spinner animation="border" size="sm" /> Redirecting to Payment…</>
+                ) : (
+                  'Proceed to Payment'
+                )}
+              </Button>
+              <small className="text-muted text-center mt-2" style={{ fontSize: '0.75rem' }}>
+                🔒 Secured by Stripe. You'll be redirected to complete payment.
+              </small>
+            </div>
+          </Col>
+        </Row>
+      </Container>
+
+      <Footer />
+    </div>
+  );
+};
+
+export default CheckoutPage;
+
+

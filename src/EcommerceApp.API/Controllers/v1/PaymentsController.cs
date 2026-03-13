@@ -40,8 +40,11 @@ public class PaymentsController : ControllerBase
         [FromBody] CreateCheckoutSessionRequest request,
         CancellationToken cancellationToken)
     {
+        Request.Headers.TryGetValue("Idempotency-Key", out var idempotencyKeyValues);
+        var idempotencyKey = idempotencyKeyValues.FirstOrDefault();
+
         var result = await _sender.Send(
-            new CreateCheckoutSessionCommand(request.AddressId),
+            new CreateCheckoutSessionCommand(request.AddressId, idempotencyKey),
             cancellationToken);
 
         return Ok(result);
