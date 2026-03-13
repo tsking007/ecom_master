@@ -36,7 +36,9 @@ public class DeleteProductCommandHandler : IRequestHandler<DeleteProductCommand>
             ?? throw new NotFoundException("Product", command.ProductId);
 
         // SoftDeleteAsync sets IsDeleted = true (Part 5 GenericRepository)
-        await _unitOfWork.Products.SoftDeleteAsync(product, cancellationToken);
+        //await _unitOfWork.Products.SoftDeleteAsync(product, cancellationToken);
+
+        await _unitOfWork.Products.HardDeleteAsync(product, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         // Publish event so search sync removes it from Elasticsearch (Part 15)

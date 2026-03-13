@@ -37,7 +37,11 @@ public class RemoveWishlistItemCommandHandler
             throw new ForbiddenException(
                 "You do not have permission to remove this wishlist item.");
 
-        await _unitOfWork.Wishlists.SoftDeleteAsync(
+        //await _unitOfWork.Wishlists.SoftDeleteAsync(
+        //    wishlistItem,
+        //    cancellationToken);
+
+        await _unitOfWork.Wishlists.HardDeleteAsync(
             wishlistItem,
             cancellationToken);
 

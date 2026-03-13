@@ -34,9 +34,9 @@ public interface IRepository<T> where T : BaseEntity
     /// Sets IsDeleted = true and UpdatedAt = UtcNow.
     /// The EF global query filter will hide this row from all future queries.
     /// </summary>
-    Task SoftDeleteAsync(
-        T entity,
-        CancellationToken cancellationToken = default);
+    //Task SoftDeleteAsync(
+    //    T entity,
+    //    CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Permanently removes the row from the database.

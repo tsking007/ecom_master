@@ -68,8 +68,8 @@ public class ElasticStoreConfiguration : IEntityTypeConfiguration<ElasticStore>
         builder.HasIndex(e => e.IsActive)
             .HasDatabaseName("IX_ElasticStores_IsActive");
 
-        // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(e => !e.IsDeleted);
+         //── Soft-delete query filter ──────────────────────────────────────────
+        //builder.HasQueryFilter(e => !e.IsDeleted);
         // Product FK is configured in ProductConfiguration
     }
 }

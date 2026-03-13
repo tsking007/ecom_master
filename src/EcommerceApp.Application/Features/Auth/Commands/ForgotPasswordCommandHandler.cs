@@ -50,7 +50,7 @@ public class ForgotPasswordCommandHandler
 
         // SECURITY: return silently whether the email exists or not.
         // This prevents user enumeration (attackers can't check if email is registered).
-        if (user == null || !user.IsActive || user.IsDeleted)
+        if (user == null || !user.IsActive)
             return;
 
         // ── 3. Invalidate previous OTPs & generate new one ────────────────────

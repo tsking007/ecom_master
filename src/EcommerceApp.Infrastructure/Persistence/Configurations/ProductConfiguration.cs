@@ -112,11 +112,11 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.HasIndex(p => new { p.IsActive, p.CreatedAt })
             .HasDatabaseName("IX_Products_IsActive_CreatedAt");
 
-        builder.HasIndex(p => p.IsDeleted)
-            .HasDatabaseName("IX_Products_IsDeleted");
+        //builder.HasIndex(p => p.IsDeleted)
+            //.HasDatabaseName("IX_Products_IsDeleted");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(p => !p.IsDeleted);
+        //builder.HasQueryFilter(p => !p.IsDeleted);
 
         // ── Relationships ─────────────────────────────────────────────────────
         // Child entities configure their own FK. Defined here to set cascade.

@@ -46,7 +46,7 @@ public class LoginCommandHandler : IRequestHandler<LoginCommand, AuthResponse>
         // to prevent user enumeration attacks.
         const string authError = "Invalid email or password.";
 
-        if (user == null || user.IsDeleted)
+        if (user == null)
             throw new UnauthorizedException(authError);
 
         // ── 2. Check account status ───────────────────────────────────────────

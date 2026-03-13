@@ -34,7 +34,7 @@ public class CartItemConfiguration : IEntityTypeConfiguration<CartItem>
             .HasDatabaseName("IX_CartItems_CartId");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(ci => !ci.IsDeleted);
+        //builder.HasQueryFilter(ci => !ci.IsDeleted);
 
         // ── Relationships ─────────────────────────────────────────────────────
         builder.HasOne(ci => ci.Cart)

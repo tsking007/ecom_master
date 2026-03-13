@@ -60,10 +60,10 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(u => u.IsActive)
             .HasDatabaseName("IX_Users_IsActive");
 
-        builder.HasIndex(u => u.IsDeleted)
-            .HasDatabaseName("IX_Users_IsDeleted");
+        //builder.HasIndex(u => u.IsDeleted)
+            //.HasDatabaseName("IX_Users_IsDeleted");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(u => !u.IsDeleted);
+        //builder.HasQueryFilter(u => !u.IsDeleted);
     }
 }

@@ -57,7 +57,7 @@ public class GetAdminOrdersQueryHandler
             PaymentStatus = order.PaymentStatus.ToString(),
             TrackingStatus = order.TrackingStatus.ToString(),
             TotalAmount = order.TotalAmount,
-            ItemCount = order.Items.Count(i => !i.IsDeleted),
+            ItemCount = order.Items.Count,
             CreatedAt = order.CreatedAt
         });
     }

@@ -30,7 +30,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
     CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Include(x => x.Items.Where(i => !i.IsDeleted))
+            .Include(x => x.Items)
             .FirstOrDefaultAsync(
                 x => x.Id == orderId && x.UserId == userId,
                 cancellationToken);
@@ -42,7 +42,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
     {
         // IgnoreQueryFilters — webhook must process even if order was soft-deleted
         return await _dbSet
-            .IgnoreQueryFilters()
+            //.IgnoreQueryFilters()
             .Include(o => o.Items)
             .FirstOrDefaultAsync(
                 o => o.StripeSessionId == stripeSessionId,
@@ -146,7 +146,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
 
         // Find the last order created today to get the current sequence
         var lastOrderNumber = await _dbSet
-            .IgnoreQueryFilters()     // include soft-deleted to keep numbering consistent
+            //.IgnoreQueryFilters()     // include soft-deleted to keep numbering consistent
             .Where(o => o.CreatedAt.Date == today)
             .OrderByDescending(o => o.OrderNumber)
             .Select(o => o.OrderNumber)

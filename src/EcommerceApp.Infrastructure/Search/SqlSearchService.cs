@@ -40,7 +40,7 @@ public class SqlSearchService : ISearchService
         var lowerTerm = term.ToLower().Trim();
 
         var query = _context.Products
-            .Where(p => p.IsActive && !p.IsDeleted)
+            .Where(p => p.IsActive)
             .Where(p =>
                 p.Name.ToLower().Contains(lowerTerm) ||
                 (p.Brand != null && p.Brand.ToLower().Contains(lowerTerm)) ||

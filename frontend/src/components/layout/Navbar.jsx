@@ -6,27 +6,29 @@ import {
   Nav,
   Button,
   Dropdown,
+  Badge,
 } from 'react-bootstrap';
-import { FiUser, FiLogOut, FiLogIn } from 'react-icons/fi';
+import { FiUser, FiLogOut, FiLogIn, FiHeart, FiPackage, FiMapPin } from 'react-icons/fi';
 import { toast } from 'react-toastify';
 import SearchBar from '../common/SearchBar.jsx';
 import CartIcon from '../cart/CartIcon.jsx';
-import { logoutThunk } from '../../store/slices/authSlice.js';
-import {
-  selectIsAuthenticated,
-  selectCurrentUser,
-} from '../../store/slices/authSlice.js';
+import { logoutThunk, selectIsAuthenticated, selectCurrentUser } from '../../store/slices/authSlice.js';
 import { resetCart } from '../../store/slices/cartSlice.js';
+import { resetWishlist, selectWishlistTotalItems } from '../../store/slices/wishlistSlice.js';
+import { resetOrders } from '../../store/slices/orderSlice.js';
 
 const AppNavbar = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const isAuthenticated = useSelector(selectIsAuthenticated);
   const user = useSelector(selectCurrentUser);
+  const wishlistCount = useSelector(selectWishlistTotalItems);
 
   const handleLogout = async () => {
     await dispatch(logoutThunk());
     dispatch(resetCart());
+    dispatch(resetWishlist());
+    dispatch(resetOrders());
     toast.success('Logged out successfully');
     navigate('/');
   };
@@ -48,6 +50,28 @@ const AppNavbar = () => {
           </div>
 
           <Nav className="align-items-center gap-2 ms-auto">
+            {/* Wishlist icon — only when authenticated */}
+            {isAuthenticated && (
+              <Nav.Link
+                as={Link}
+                to="/wishlist"
+                className="position-relative text-white p-1"
+                title="Wishlist"
+              >
+                <FiHeart size={20} />
+                {wishlistCount > 0 && (
+                  <Badge
+                    bg="danger"
+                    pill
+                    className="position-absolute"
+                    style={{ top: '-4px', right: '-6px', fontSize: '0.6rem', minWidth: '16px' }}
+                  >
+                    {wishlistCount > 99 ? '99+' : wishlistCount}
+                  </Badge>
+                )}
+              </Nav.Link>
+            )}
+
             <CartIcon />
 
             {isAuthenticated ? (
@@ -64,7 +88,16 @@ const AppNavbar = () => {
                 </Dropdown.Toggle>
                 <Dropdown.Menu>
                   <Dropdown.Item as={Link} to="/cart">
-                    My Cart
+                    <FiUser className="me-2" /> My Cart
+                  </Dropdown.Item>
+                  <Dropdown.Item as={Link} to="/wishlist">
+                    <FiHeart className="me-2" /> My Wishlist
+                  </Dropdown.Item>
+                  <Dropdown.Item as={Link} to="/profile?tab=orders">
+                    <FiPackage className="me-2" /> My Orders
+                  </Dropdown.Item>
+                  <Dropdown.Item as={Link} to="/profile?tab=addresses">
+                    <FiMapPin className="me-2" /> My Addresses
                   </Dropdown.Item>
                   <Dropdown.Divider />
                   <Dropdown.Item onClick={handleLogout} className="text-danger">

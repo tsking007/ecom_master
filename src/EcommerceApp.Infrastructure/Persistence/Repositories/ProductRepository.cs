@@ -26,7 +26,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Include(p => p.Reviews.Where(r => r.IsApproved && !r.IsDeleted))
+            .Include(p => p.Reviews.Where(r => r.IsApproved))
                 .ThenInclude(r => r.User)
             .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
     }
@@ -183,7 +183,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         CancellationToken cancellationToken = default)
     {
         var stats = await _context.ProductReviews
-            .Where(r => r.ProductId == productId && r.IsApproved && !r.IsDeleted)
+            .Where(r => r.ProductId == productId && r.IsApproved)
             .GroupBy(r => r.ProductId)
             .Select(g => new
             {
@@ -212,7 +212,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     {
         // IgnoreQueryFilters — a slug used by a soft-deleted product is still reserved
         return await _dbSet
-            .IgnoreQueryFilters()
+            //.IgnoreQueryFilters()
             .AnyAsync(p => p.Slug == slug, cancellationToken);
     }
 
@@ -222,7 +222,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .IgnoreQueryFilters()
+            //.IgnoreQueryFilters()
             .AnyAsync(
                 p => p.Slug == slug && p.Id != excludeProductId,
                 cancellationToken);

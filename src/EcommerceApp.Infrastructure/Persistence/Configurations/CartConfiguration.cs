@@ -28,7 +28,7 @@ public class CartConfiguration : IEntityTypeConfiguration<Cart>
             .HasDatabaseName("IX_Carts_LastActivityAt");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(c => !c.IsDeleted);
+        //builder.HasQueryFilter(c => !c.IsDeleted);
 
         // ── Relationships ─────────────────────────────────────────────────────
         builder.HasOne(c => c.User)

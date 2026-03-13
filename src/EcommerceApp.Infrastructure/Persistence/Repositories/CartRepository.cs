@@ -23,7 +23,7 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
         CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Include(c => c.Items.Where(i => !i.IsDeleted))
+            .Include(c => c.Items)
                 .ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(c => c.UserId == userId, cancellationToken);
     }
@@ -34,15 +34,10 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
         int idleDays,
         CancellationToken cancellationToken = default)
     {
-        var cutoff = DateTime.UtcNow.AddDays(-idleDays);
-
         return await _dbSet
             .Include(c => c.User)
-            .Include(c => c.Items.Where(i => !i.IsDeleted))
+            .Include(c => c.Items)
                 .ThenInclude(i => i.Product)
-            .Where(c =>
-                c.LastActivityAt < cutoff &&
-                c.Items.Any(i => !i.IsDeleted))
             .ToListAsync(cancellationToken);
     }
 
@@ -70,10 +65,7 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
         CartItem item,
         CancellationToken cancellationToken = default)
     {
-        // Soft delete the cart item
-        item.IsDeleted = true;
-        item.UpdatedAt = DateTime.UtcNow;
-        _context.Entry(item).State = EntityState.Modified;
+        _context.CartItems.Remove(item);
         return Task.CompletedTask;
     }
 
@@ -81,17 +73,12 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
         Guid cartId,
         CancellationToken cancellationToken = default)
     {
-        // Batch soft-delete — avoids loading each item individually
         var items = await _context.CartItems
-            .Where(ci => ci.CartId == cartId && !ci.IsDeleted)
+            .Where(ci => ci.CartId == cartId)
             .ToListAsync(cancellationToken);
 
-        var now = DateTime.UtcNow;
-        foreach (var item in items)
-        {
-            item.IsDeleted = true;
-            item.UpdatedAt = now;
-        }
+        _context.CartItems.RemoveRange(items);
+
     }
 
     public async Task ClearPurchasedItemsAsync(
@@ -104,16 +91,10 @@ public class CartRepository : GenericRepository<Cart>, ICartRepository
 
         var items = await _context.CartItems
             .Where(ci =>
-                ci.CartId == cartId &&
-                !ci.IsDeleted &&
+                ci.CartId == cartId && 
                 productIds.Contains(ci.ProductId))
             .ToListAsync(cancellationToken);
 
-        var now = DateTime.UtcNow;
-        foreach (var item in items)
-        {
-            item.IsDeleted = true;
-            item.UpdatedAt = now;
-        }
+        _context.CartItems.RemoveRange(items);
     }
 }

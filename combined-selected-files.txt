@@ -1,882 +1,1730 @@
-================================================================================
-FILE: src/EcommerceApp.Domain/Entities/Address.cs
-================================================================================
+====================================================================================================
+FILE: frontend/src/App.jsx
+====================================================================================================
 
-using EcommerceApp.Domain.Common;
+import { ToastContainer } from 'react-toastify';
+import AppRouter from './routes/AppRouter.jsx';
+import { useTokenRefresh } from './hooks/useTokenRefresh.js';
+import './App.css';
 
-namespace EcommerceApp.Domain.Entities;
+function App() {
+  useTokenRefresh();
 
-public class Address : BaseEntity
-{
-    public Guid UserId { get; set; }
-    public string FullName { get; set; } = string.Empty;
-    public string PhoneNumber { get; set; } = string.Empty;
-    public string AddressLine1 { get; set; } = string.Empty;
-    public string? AddressLine2 { get; set; }
-    public string City { get; set; } = string.Empty;
-    public string State { get; set; } = string.Empty;
-    public string PostalCode { get; set; } = string.Empty;
-    public string Country { get; set; } = string.Empty;
-    public bool IsDefault { get; set; } = false;
-
-    // "Home" | "Work" | "Other"
-    public string AddressType { get; set; } = "Home";
-
-    // -- Navigation ------------------------------------------------------------
-    public User User { get; set; } = null!;
+  return (
+    <>
+      <AppRouter />
+      <ToastContainer
+        position="top-right"
+        autoClose={3000}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        theme="colored"
+      />
+    </>
+  );
 }
 
-
-================================================================================
-FILE: src/EcommerceApp.Domain/Entities/User.cs
-================================================================================
-
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Domain.Enums;
-using System.Net;
-
-namespace EcommerceApp.Domain.Entities;
-
-public class User : BaseEntity
-{
-    public string FirstName { get; set; } = string.Empty;
-    public string LastName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string? PhoneNumber { get; set; }
-    public string PasswordHash { get; set; } = string.Empty;
-    public UserRole Role { get; set; } = UserRole.Customer;
-    public bool IsEmailVerified { get; set; } = false;
-    public bool IsPhoneVerified { get; set; } = false;
-    public bool IsActive { get; set; } = true;
-    public string? ProfileImageUrl { get; set; }
-    public DateTime? DateOfBirth { get; set; }
-
-    // -- Computed --------------------------------------------------------------
-    public string FullName => $"{FirstName} {LastName}".Trim();
-
-    // -- Navigation ------------------------------------------------------------
-    public Cart? Cart { get; set; }
-    public ICollection<Order> Orders { get; set; }
-        = new List<Order>();
-    public ICollection<Address> Addresses { get; set; }
-        = new List<Address>();
-    public ICollection<ProductReview> Reviews { get; set; }
-        = new List<ProductReview>();
-    public ICollection<Wishlist> WishlistItems { get; set; }
-        = new List<Wishlist>();
-    public ICollection<TokenStore> TokenStores { get; set; }
-        = new List<TokenStore>();
-    public ICollection<OtpStore> OtpStores { get; set; }
-        = new List<OtpStore>();
-    public ICollection<NotificationLog> NotificationLogs { get; set; }
-        = new List<NotificationLog>();
-    public ICollection<StockReservation> StockReservations { get; set; }
-        = new List<StockReservation>();
-}
+export default App;
 
 
-================================================================================
-FILE: src/EcommerceApp.Domain/Entities/Order.cs
-================================================================================
+====================================================================================================
+FILE: frontend/src/routes/AppRouter.jsx
+====================================================================================================
 
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Domain.Enums;
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import { selectIsAuthenticated } from '../store/slices/authSlice.js';
+import ProtectedRoute from './ProtectedRoute.jsx';
 
-namespace EcommerceApp.Domain.Entities;
+// Auth pages
+import LoginPage from '../pages/LoginPage.jsx';
+import SignupPage from '../pages/SignupPage.jsx';
+import VerifyOtpPage from '../pages/VerifyOtpPage.jsx';
+import ForgotPasswordPage from '../pages/ForgotPasswordPage.jsx';
+import ResetPasswordPage from '../pages/ResetPasswordPage.jsx';
 
-public class Order : BaseEntity
-{
-    public Guid UserId { get; set; }
+// Main pages
+import HomePage from '../pages/HomePage.jsx';
+import ProductListPage from '../pages/ProductListPage.jsx';
+import ProductDetailPage from '../pages/ProductDetailPage.jsx';
+import SearchResultsPage from '../pages/SearchResultsPage.jsx';
+import CartPage from '../pages/CartPage.jsx';
 
-    // Human-readable order reference e.g. "ORD-20240115-00034"
-    public string OrderNumber { get; set; } = string.Empty;
+// Redirect authenticated users away from auth-only pages
+const GuestRoute = ({ children }) => {
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+  return isAuthenticated ? <Navigate to="/" replace /> : children;
+};
 
-    // -- Financials ------------------------------------------------------------
-    public decimal SubTotal { get; set; }
-    public decimal DiscountAmount { get; set; } = 0;
-    public decimal ShippingAmount { get; set; } = 0;
-    public decimal TaxAmount { get; set; } = 0;
-    public decimal TotalAmount { get; set; }
+const AppRouter = () => {
+  return (
+    <BrowserRouter>
+      <Routes>
+        {/* ── Public ───────────────────────────────────────────── */}
+        <Route path="/" element={<HomePage />} />
+        <Route path="/products" element={<ProductListPage />} />
+        <Route path="/products/:slug" element={<ProductDetailPage />} />
+        <Route path="/search" element={<SearchResultsPage />} />
 
-    // -- Status ----------------------------------------------------------------
-    public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
-    public TrackingStatus TrackingStatus { get; set; } = TrackingStatus.Placed;
+        {/* ── Auth (guest only) ─────────────────────────────────── */}
+        <Route path="/auth/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
+        <Route path="/auth/signup" element={<GuestRoute><SignupPage /></GuestRoute>} />
+        <Route path="/auth/verify-otp" element={<VerifyOtpPage />} />
+        <Route path="/auth/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />
+        <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
 
-    // -- Stripe ----------------------------------------------------------------
-    public string? StripeSessionId { get; set; }
-    public string? StripePaymentIntentId { get; set; }
+        {/* ── Protected ─────────────────────────────────────────── */}
+        <Route path="/cart" element={<ProtectedRoute><CartPage /></ProtectedRoute>} />
 
-    // -- Optional fields -------------------------------------------------------
-    public string? CouponCode { get; set; }
+        {/* ── Catch-all ─────────────────────────────────────────── */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
+  );
+};
 
-    // JSON-serialized snapshot of the Address at time of order placement.
-    // Stored as a plain JSON string so it survives address deletion/edits.
-    public string ShippingAddressSnapshot { get; set; } = string.Empty;
-
-    public string? Notes { get; set; }
-    public string? TrackingNumber { get; set; }
-    public DateTime? EstimatedDeliveryDate { get; set; }
-    public DateTime? DeliveredAt { get; set; }
-    public DateTime? CancelledAt { get; set; }
-    public string? CancellationReason { get; set; }
-    public DateTime? ReturnRequestedAt { get; set; }
-    public string? ReturnReason { get; set; }
-
-    // -- Navigation ------------------------------------------------------------
-    public User User { get; set; } = null!;
-    public ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
-}
-
-
-================================================================================
-FILE: src/EcommerceApp.Domain/Interfaces/IUserRepository.cs
-================================================================================
-
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Domain.Entities;
-
-namespace EcommerceApp.Domain.Interfaces;
-
-public interface IUserRepository : IRepository<User>
-{
-    Task<User?> GetByEmailAsync(
-        string email,
-        CancellationToken cancellationToken = default);
-
-    Task<User?> GetByPhoneNumberAsync(
-        string phoneNumber,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns the user with all their Address records eagerly loaded.
-    /// Used in the profile and checkout flows.
-    /// </summary>
-    Task<User?> GetWithAddressesAsync(
-        Guid userId,
-        CancellationToken cancellationToken = default);
-
-    Task<bool> EmailExistsAsync(
-        string email,
-        CancellationToken cancellationToken = default);
-
-    Task<bool> PhoneExistsAsync(
-        string phoneNumber,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Admin user list � supports free-text search on name/email and
-    /// filtering by active status.
-    /// </summary>
-    Task<PagedResult<User>> GetPagedAsync(
-        int pageNumber,
-        int pageSize,
-        string? searchTerm,
-        bool? isActive,
-        CancellationToken cancellationToken = default);
-}
+export default AppRouter;
 
 
-================================================================================
-FILE: src/EcommerceApp.Application/Features/Payments/Commands/CreateCheckoutSessionCommand.cs
-================================================================================
+====================================================================================================
+FILE: frontend/src/routes/ProtectedRoute.jsx
+====================================================================================================
 
-using EcommerceApp.Application.Common;
-using EcommerceApp.Application.Common.Exceptions;
-using EcommerceApp.Application.Common.Interfaces;
-using EcommerceApp.Application.Features.Payments.DTOs;
-using EcommerceApp.Domain.Entities;
-using EcommerceApp.Domain.Enums;
-using EcommerceApp.Domain.Interfaces;
-using MediatR;
-using Microsoft.Extensions.Options;
-using System.Text.Json;
+import { useSelector } from 'react-redux';
+import { Navigate, useLocation } from 'react-router-dom';
+import { selectIsAuthenticated } from '../store/slices/authSlice.js';
 
-namespace EcommerceApp.Application.Features.Payments.Commands;
+// Redirects unauthenticated users to login, preserving the intended destination
+const ProtectedRoute = ({ children }) => {
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+  const location = useLocation();
 
-public record CreateCheckoutSessionCommand(Guid? AddressId = null)
-    : IRequest<CheckoutSessionResponseDto>;
+  if (!isAuthenticated) {
+    return <Navigate to="/auth/login" state={{ from: location }} replace />;
+  }
 
-public class CreateCheckoutSessionCommandHandler
-    : IRequestHandler<CreateCheckoutSessionCommand, CheckoutSessionResponseDto>
-{
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly ICurrentUserService _currentUserService;
-    private readonly IStripePaymentService _stripePaymentService;
-    private readonly StripeSettings _stripeSettings;
-    private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
+  return children;
+};
 
-    public CreateCheckoutSessionCommandHandler(
-        IUnitOfWork unitOfWork,
-        ICurrentUserService currentUserService,
-        IStripePaymentService stripePaymentService,
-        IOptions<StripeSettings> stripeOptions,
-        ICheckoutTransactionExecutor checkoutTransactionExecutor)
-    {
-        _unitOfWork = unitOfWork;
-        _currentUserService = currentUserService;
-        _stripePaymentService = stripePaymentService;
-        _stripeSettings = stripeOptions.Value;
-        _checkoutTransactionExecutor = checkoutTransactionExecutor;
+export default ProtectedRoute;
+
+
+====================================================================================================
+FILE: frontend/src/store/store.js
+====================================================================================================
+
+import { configureStore } from '@reduxjs/toolkit';
+import authReducer from './slices/authSlice.js';
+import productReducer from './slices/productSlice.js';
+import searchReducer from './slices/searchSlice.js';
+import cartReducer from './slices/cartSlice.js';
+
+export const store = configureStore({
+  reducer: {
+    auth: authReducer,
+    products: productReducer,
+    search: searchReducer,
+    cart: cartReducer,
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: {
+        ignoredPaths: ['auth.accessTokenExpiresAt', 'auth.refreshTokenExpiresAt'],
+      },
+    }),
+});
+
+
+====================================================================================================
+FILE: frontend/src/store/slices/authSlice.js
+====================================================================================================
+
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import {
+  loginApi,
+  logoutApi,
+  signupApi,
+  verifyOtpApi,
+  forgotPasswordApi,
+  resetPasswordApi,
+  getMeApi,
+} from '../../api/authApi.js';
+
+// ── Helper: persist tokens to localStorage ────────────────────────────────────
+const saveTokens = ({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }) => {
+  localStorage.setItem('accessToken', accessToken);
+  localStorage.setItem('refreshToken', refreshToken);
+  localStorage.setItem('accessTokenExpiresAt', accessTokenExpiresAt);
+  localStorage.setItem('refreshTokenExpiresAt', refreshTokenExpiresAt);
+};
+
+const clearTokens = () => {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('refreshToken');
+  localStorage.removeItem('accessTokenExpiresAt');
+  localStorage.removeItem('refreshTokenExpiresAt');
+};
+
+// ── Thunks ────────────────────────────────────────────────────────────────────
+
+export const loginThunk = createAsyncThunk(
+  'auth/login',
+  async (credentials, { rejectWithValue }) => {
+    try {
+      const response = await loginApi(credentials);
+      return response.data;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Login failed'
+      );
+    }
+  }
+);
+
+export const signupThunk = createAsyncThunk(
+  'auth/signup',
+  async (userData, { rejectWithValue }) => {
+    try {
+      const response = await signupApi(userData);
+      return response.data; // { email, message }
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Signup failed'
+      );
+    }
+  }
+);
+
+export const verifyOtpThunk = createAsyncThunk(
+  'auth/verifyOtp',
+  async (otpData, { rejectWithValue }) => {
+    try {
+      const response = await verifyOtpApi(otpData);
+      return response.data; // { isAuthenticated, auth, passwordResetToken, message }
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'OTP verification failed'
+      );
+    }
+  }
+);
+
+export const logoutThunk = createAsyncThunk(
+  'auth/logout',
+  async (_, { rejectWithValue }) => {
+    try {
+      await logoutApi();
+    } catch (err) {
+      // Always clear locally even if server call fails
+    }
+  }
+);
+
+export const forgotPasswordThunk = createAsyncThunk(
+  'auth/forgotPassword',
+  async (data, { rejectWithValue }) => {
+    try {
+      await forgotPasswordApi(data);
+      return true;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Request failed'
+      );
+    }
+  }
+);
+
+export const resetPasswordThunk = createAsyncThunk(
+  'auth/resetPassword',
+  async (data, { rejectWithValue }) => {
+    try {
+      await resetPasswordApi(data);
+      return true;
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || err.response?.data?.title || 'Reset failed'
+      );
+    }
+  }
+);
+
+export const fetchCurrentUserThunk = createAsyncThunk(
+  'auth/fetchCurrentUser',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await getMeApi();
+      return response.data;
+    } catch (err) {
+      return rejectWithValue('Session expired');
+    }
+  }
+);
+
+// ── Initial State ─────────────────────────────────────────────────────────────
+const initialState = {
+  user: null,
+  accessToken: localStorage.getItem('accessToken') || null,
+  refreshToken: localStorage.getItem('refreshToken') || null,
+  accessTokenExpiresAt: localStorage.getItem('accessTokenExpiresAt') || null,
+  refreshTokenExpiresAt: localStorage.getItem('refreshTokenExpiresAt') || null,
+  isAuthenticated: !!localStorage.getItem('accessToken'),
+
+  // Signup flow: temporarily hold email for OTP step
+  pendingEmail: null,
+  // Forgot password flow: hold email for OTP step
+  pendingResetEmail: null,
+  // Reset password flow: hold token from OTP verify
+  passwordResetToken: null,
+
+  loading: false,
+  error: null,
+};
+
+// ── Slice ─────────────────────────────────────────────────────────────────────
+const authSlice = createSlice({
+  name: 'auth',
+  initialState,
+  reducers: {
+    // Called by axios interceptor after silent refresh
+    // Inside authSlice reducers:
+    setPendingResetEmail: (state, action) => {
+        state.pendingResetEmail = action.payload;
+    },
+    setCredentials: (state, action) => {
+      const { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
+      state.accessToken = accessToken;
+      state.refreshToken = refreshToken;
+      state.accessTokenExpiresAt = accessTokenExpiresAt;
+      state.refreshTokenExpiresAt = refreshTokenExpiresAt;
+      saveTokens(action.payload);
+    },
+    logout: (state) => {
+      state.user = null;
+      state.accessToken = null;
+      state.refreshToken = null;
+      state.accessTokenExpiresAt = null;
+      state.refreshTokenExpiresAt = null;
+      state.isAuthenticated = false;
+      state.pendingEmail = null;
+      state.pendingResetEmail = null;
+      state.passwordResetToken = null;
+      state.error = null;
+      clearTokens();
+    },
+    clearError: (state) => {
+      state.error = null;
+    },
+    clearPendingState: (state) => {
+      state.pendingEmail = null;
+      state.pendingResetEmail = null;
+      state.passwordResetToken = null;
+    },
+  },
+  extraReducers: (builder) => {
+    // ── Login ──────────────────────────────────────────────────────────────────
+    builder
+      .addCase(loginThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(loginThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        const { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt } = action.payload;
+        state.user = user;
+        state.accessToken = accessToken;
+        state.refreshToken = refreshToken;
+        state.accessTokenExpiresAt = accessTokenExpiresAt;
+        state.refreshTokenExpiresAt = refreshTokenExpiresAt;
+        state.isAuthenticated = true;
+        saveTokens({ accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt });
+      })
+      .addCase(loginThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Signup ─────────────────────────────────────────────────────────────────
+    builder
+      .addCase(signupThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(signupThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        state.pendingEmail = action.payload.email;
+      })
+      .addCase(signupThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Verify OTP ─────────────────────────────────────────────────────────────
+    builder
+      .addCase(verifyOtpThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(verifyOtpThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        const { isAuthenticated, auth, passwordResetToken } = action.payload;
+        if (isAuthenticated && auth) {
+          state.user = auth.user;
+          state.accessToken = auth.accessToken;
+          state.refreshToken = auth.refreshToken;
+          state.accessTokenExpiresAt = auth.accessTokenExpiresAt;
+          state.refreshTokenExpiresAt = auth.refreshTokenExpiresAt;
+          state.isAuthenticated = true;
+          state.pendingEmail = null;
+          saveTokens({
+            accessToken: auth.accessToken,
+            refreshToken: auth.refreshToken,
+            accessTokenExpiresAt: auth.accessTokenExpiresAt,
+            refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
+          });
+        }
+        // Forgot password OTP flow — store reset token
+        if (passwordResetToken) {
+          state.passwordResetToken = passwordResetToken;
+          state.pendingResetEmail = null;
+        }
+      })
+      .addCase(verifyOtpThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Logout ─────────────────────────────────────────────────────────────────
+    builder
+      .addCase(logoutThunk.fulfilled, (state) => {
+        state.user = null;
+        state.accessToken = null;
+        state.refreshToken = null;
+        state.accessTokenExpiresAt = null;
+        state.refreshTokenExpiresAt = null;
+        state.isAuthenticated = false;
+        state.error = null;
+        clearTokens();
+      });
+
+    // ── Forgot Password ────────────────────────────────────────────────────────
+    builder
+      .addCase(forgotPasswordThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(forgotPasswordThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        // pendingResetEmail is set before dispatch in the component
+      })
+      .addCase(forgotPasswordThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Reset Password ─────────────────────────────────────────────────────────
+    builder
+      .addCase(resetPasswordThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(resetPasswordThunk.fulfilled, (state) => {
+        state.loading = false;
+        state.passwordResetToken = null;
+      })
+      .addCase(resetPasswordThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Fetch Current User ─────────────────────────────────────────────────────
+    builder
+      .addCase(fetchCurrentUserThunk.fulfilled, (state, action) => {
+        state.user = action.payload;
+        state.isAuthenticated = true;
+      })
+      .addCase(fetchCurrentUserThunk.rejected, (state) => {
+        state.user = null;
+        state.isAuthenticated = false;
+        clearTokens();
+      });
+  },
+});
+
+export const { setCredentials, logout, clearError, clearPendingState,setPendingResetEmail } = authSlice.actions;
+export default authSlice.reducer;
+
+// ── Selectors ─────────────────────────────────────────────────────────────────
+export const selectCurrentUser = (state) => state.auth.user;
+export const selectIsAuthenticated = (state) => state.auth.isAuthenticated;
+export const selectAuthLoading = (state) => state.auth.loading;
+export const selectAuthError = (state) => state.auth.error;
+export const selectPendingEmail = (state) => state.auth.pendingEmail;
+export const selectPendingResetEmail = (state) => state.auth.pendingResetEmail;
+export const selectPasswordResetToken = (state) => state.auth.passwordResetToken;
+export const selectAccessToken = (state) => state.auth.accessToken;
+
+
+====================================================================================================
+FILE: frontend/src/store/slices/cartSlice.js
+====================================================================================================
+
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import {
+  getCartApi,
+  addToCartApi,
+  updateCartItemApi,
+  removeCartItemApi,
+  clearCartApi,
+} from '../../api/cartApi.js';
+
+// ── Thunks ────────────────────────────────────────────────────────────────────
+
+export const fetchCartThunk = createAsyncThunk(
+  'cart/fetchCart',
+  async (_, { rejectWithValue }) => {
+    try {
+      const res = await getCartApi();
+      return res.data; // CartDto
+    } catch (err) {
+      return rejectWithValue('Failed to fetch cart');
+    }
+  }
+);
+
+export const addToCartThunk = createAsyncThunk(
+  'cart/addToCart',
+  async ({ productId, quantity }, { dispatch, rejectWithValue }) => {
+    try {
+      await addToCartApi(productId, quantity);
+      dispatch(fetchCartThunk()); // re-sync cart after mutation
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail ||
+        err.response?.data?.errors?.Quantity?.[0] ||
+        err.response?.data?.errors?.ProductId?.[0] ||
+        'Failed to add to cart'
+      );
+    }
+  }
+);
+
+export const updateCartItemThunk = createAsyncThunk(
+  'cart/updateItem',
+  async ({ cartItemId, quantity }, { dispatch, rejectWithValue }) => {
+    try {
+      await updateCartItemApi(cartItemId, quantity);
+      dispatch(fetchCartThunk());
+    } catch (err) {
+      return rejectWithValue(
+        err.response?.data?.detail || 'Failed to update cart item'
+      );
+    }
+  }
+);
+
+export const removeCartItemThunk = createAsyncThunk(
+  'cart/removeItem',
+  async (cartItemId, { dispatch, rejectWithValue }) => {
+    try {
+      await removeCartItemApi(cartItemId);
+      dispatch(fetchCartThunk());
+    } catch (err) {
+      return rejectWithValue('Failed to remove cart item');
+    }
+  }
+);
+
+export const clearCartThunk = createAsyncThunk(
+  'cart/clearCart',
+  async (_, { dispatch, rejectWithValue }) => {
+    try {
+      await clearCartApi();
+      dispatch(fetchCartThunk());
+    } catch (err) {
+      return rejectWithValue('Failed to clear cart');
+    }
+  }
+);
+
+// ── Slice ─────────────────────────────────────────────────────────────────────
+
+const cartSlice = createSlice({
+  name: 'cart',
+  initialState: {
+    cartId: null,
+    items: [],
+    totalItems: 0,
+    subtotal: 0,
+    hasOutOfStockItems: false,
+    hasPriceChanges: false,
+    loading: false,
+    mutating: false, // add/update/remove in progress
+    error: null,
+  },
+  reducers: {
+    clearCartError: (state) => {
+      state.error = null;
+    },
+    resetCart: (state) => {
+      state.cartId = null;
+      state.items = [];
+      state.totalItems = 0;
+      state.subtotal = 0;
+      state.hasOutOfStockItems = false;
+      state.hasPriceChanges = false;
+      state.error = null;
+    },
+  },
+  extraReducers: (builder) => {
+    // ── Fetch cart ───────────────────────────────────────────────────────────
+    builder
+      .addCase(fetchCartThunk.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(fetchCartThunk.fulfilled, (state, action) => {
+        state.loading = false;
+        const { cartId, items, totalItems, subtotal, hasOutOfStockItems, hasPriceChanges } =
+          action.payload;
+        state.cartId = cartId;
+        state.items = items;
+        state.totalItems = totalItems;
+        state.subtotal = subtotal;
+        state.hasOutOfStockItems = hasOutOfStockItems;
+        state.hasPriceChanges = hasPriceChanges;
+      })
+      .addCase(fetchCartThunk.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload;
+      });
+
+    // ── Add to cart ──────────────────────────────────────────────────────────
+    builder
+      .addCase(addToCartThunk.pending, (state) => {
+        state.mutating = true;
+        state.error = null;
+      })
+      .addCase(addToCartThunk.fulfilled, (state) => {
+        state.mutating = false;
+      })
+      .addCase(addToCartThunk.rejected, (state, action) => {
+        state.mutating = false;
+        state.error = action.payload;
+      });
+
+    // ── Update item ──────────────────────────────────────────────────────────
+    builder
+      .addCase(updateCartItemThunk.pending, (state) => { state.mutating = true; })
+      .addCase(updateCartItemThunk.fulfilled, (state) => { state.mutating = false; })
+      .addCase(updateCartItemThunk.rejected, (state, action) => {
+        state.mutating = false;
+        state.error = action.payload;
+      });
+
+    // ── Remove item ──────────────────────────────────────────────────────────
+    builder
+      .addCase(removeCartItemThunk.pending, (state) => { state.mutating = true; })
+      .addCase(removeCartItemThunk.fulfilled, (state) => { state.mutating = false; })
+      .addCase(removeCartItemThunk.rejected, (state, action) => {
+        state.mutating = false;
+        state.error = action.payload;
+      });
+
+    // ── Clear cart ───────────────────────────────────────────────────────────
+    builder
+      .addCase(clearCartThunk.pending, (state) => { state.mutating = true; })
+      .addCase(clearCartThunk.fulfilled, (state) => { state.mutating = false; })
+      .addCase(clearCartThunk.rejected, (state, action) => {
+        state.mutating = false;
+        state.error = action.payload;
+      });
+  },
+});
+
+export const { clearCartError, resetCart } = cartSlice.actions;
+export default cartSlice.reducer;
+
+// ── Selectors ─────────────────────────────────────────────────────────────────
+export const selectCartItems = (state) => state.cart.items;
+export const selectCartTotalItems = (state) => state.cart.totalItems;
+export const selectCartSubtotal = (state) => state.cart.subtotal;
+export const selectCartLoading = (state) => state.cart.loading;
+export const selectCartMutating = (state) => state.cart.mutating;
+export const selectCartError = (state) => state.cart.error;
+export const selectHasOutOfStockItems = (state) => state.cart.hasOutOfStockItems;
+export const selectHasPriceChanges = (state) => state.cart.hasPriceChanges;
+
+
+====================================================================================================
+FILE: frontend/src/api/axiosInstance.js
+====================================================================================================
+
+import axios from 'axios';
+import { store } from '../store/store.js';
+import { setCredentials, logout } from '../store/slices/authSlice.js';
+
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://localhost:7262';
+
+const axiosInstance = axios.create({
+  baseURL: BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// ── Request interceptor: attach access token ──────────────────────────────────
+axiosInstance.interceptors.request.use(
+  (config) => {
+    const state = store.getState();
+    const token = state.auth.accessToken;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ── Response interceptor: silent token refresh on 401 ────────────────────────
+let isRefreshing = false;
+let failedQueue = [];
+
+const processQueue = (error, token = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
+axiosInstance.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Don't retry refresh endpoint itself or already-retried requests
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !originalRequest.url.includes('/auth/refresh') &&
+      !originalRequest.url.includes('/auth/login')
+    ) {
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        })
+          .then((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            return axiosInstance(originalRequest);
+          })
+          .catch((err) => Promise.reject(err));
+      }
+
+      originalRequest._retry = true;
+      isRefreshing = true;
+
+      const state = store.getState();
+      const { accessToken, refreshToken } = state.auth;
+
+      try {
+        const response = await axios.post(
+          `${BASE_URL}/api/v1/auth/refresh`,
+          { accessToken, refreshToken },
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+
+        const { accessToken: newAccessToken, refreshToken: newRefreshToken,
+                accessTokenExpiresAt, refreshTokenExpiresAt } = response.data;
+
+        store.dispatch(
+          setCredentials({
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken,
+            accessTokenExpiresAt,
+            refreshTokenExpiresAt,
+          })
+        );
+
+        processQueue(null, newAccessToken);
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return axiosInstance(originalRequest);
+      } catch (refreshError) {
+        processQueue(refreshError, null);
+        store.dispatch(logout());
+        return Promise.reject(refreshError);
+      } finally {
+        isRefreshing = false;
+      }
     }
 
-    public async Task<CheckoutSessionResponseDto> Handle(
-        CreateCheckoutSessionCommand request,
+    return Promise.reject(error);
+  }
+);
+
+export default axiosInstance;
+
+
+====================================================================================================
+FILE: frontend/src/api/cartApi.js
+====================================================================================================
+
+import axiosInstance from './axiosInstance.js';
+
+const CART_BASE = '/api/v1/cart';
+
+// GET /api/v1/cart
+export const getCartApi = () =>
+  axiosInstance.get(CART_BASE);
+
+// POST /api/v1/cart  { productId, quantity }
+export const addToCartApi = (productId, quantity) =>
+  axiosInstance.post(CART_BASE, { productId, quantity });
+
+// PUT /api/v1/cart/:cartItemId  { quantity }
+export const updateCartItemApi = (cartItemId, quantity) =>
+  axiosInstance.put(`${CART_BASE}/${cartItemId}`, { quantity });
+
+// DELETE /api/v1/cart/:cartItemId
+export const removeCartItemApi = (cartItemId) =>
+  axiosInstance.delete(`${CART_BASE}/${cartItemId}`);
+
+// DELETE /api/v1/cart
+export const clearCartApi = () =>
+  axiosInstance.delete(CART_BASE);
+
+
+====================================================================================================
+FILE: frontend/src/api/authApi.js
+====================================================================================================
+
+import axiosInstance from './axiosInstance.js';
+
+const AUTH_BASE = '/api/v1/auth';
+
+// ── Signup ─────────────────────────────────────────────────────────────────────
+// Response: { email, message }
+export const signupApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/signup`, data);
+
+// ── Verify OTP ────────────────────────────────────────────────────────────────
+// purpose: 1 = EmailVerification, 2 = ForgotPassword (based on your OtpPurpose enum)
+// Response: { isAuthenticated, auth, passwordResetToken, message }
+export const verifyOtpApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/verify-otp`, data);
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+// Response: { user, accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
+export const loginApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/login`, data);
+
+// ── Logout ────────────────────────────────────────────────────────────────────
+// Response: 204 No Content
+export const logoutApi = () =>
+  axiosInstance.post(`${AUTH_BASE}/logout`);
+
+// ── Forgot Password ───────────────────────────────────────────────────────────
+// Response: 200 or 204
+export const forgotPasswordApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/forgot-password`, data);
+
+// ── Reset Password ────────────────────────────────────────────────────────────
+// Response: 204 No Content
+export const resetPasswordApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/reset-password`, data);
+
+// ── Refresh Token ─────────────────────────────────────────────────────────────
+// Response: { accessToken, refreshToken, accessTokenExpiresAt, refreshTokenExpiresAt }
+export const refreshTokenApi = (data) =>
+  axiosInstance.post(`${AUTH_BASE}/refresh`, data);
+
+// ── Get Current User ──────────────────────────────────────────────────────────
+// Response: UserDto
+export const getMeApi = () =>
+  axiosInstance.get(`${AUTH_BASE}/me`);
+
+
+====================================================================================================
+FILE: frontend/src/pages/CartPage.jsx
+====================================================================================================
+
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, Link } from 'react-router-dom';
+import {
+  Container, Row, Col, Card, Button, Badge,
+  Spinner, Alert, Image, Table,
+} from 'react-bootstrap';
+import { FiTrash2, FiMinus, FiPlus, FiShoppingCart, FiArrowRight } from 'react-icons/fi';
+import { toast } from 'react-toastify';
+import AppNavbar from '../components/layout/Navbar.jsx';
+import Footer from '../components/layout/Footer.jsx';
+import {
+  fetchCartThunk,
+  updateCartItemThunk,
+  removeCartItemThunk,
+  clearCartThunk,
+  selectCartItems,
+  selectCartSubtotal,
+  selectCartTotalItems,
+  selectCartLoading,
+  selectCartMutating,
+  selectHasOutOfStockItems,
+  selectHasPriceChanges,
+} from '../store/slices/cartSlice.js';
+import { selectIsAuthenticated, selectCurrentUser } from '../store/slices/authSlice.js';
+
+const PLACEHOLDER = 'https://placehold.co/80x80?text=?';
+
+const CartPage = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+  const user = useSelector(selectCurrentUser);
+  const items = useSelector(selectCartItems);
+  const subtotal = useSelector(selectCartSubtotal);
+  const totalItems = useSelector(selectCartTotalItems);
+  const loading = useSelector(selectCartLoading);
+  const mutating = useSelector(selectCartMutating);
+  const hasOutOfStock = useSelector(selectHasOutOfStockItems);
+  const hasPriceChanges = useSelector(selectHasPriceChanges);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      dispatch(fetchCartThunk());
+    }
+  }, [dispatch, isAuthenticated]);
+
+  // Guard: not logged in
+  if (!isAuthenticated) {
+    return (
+      <>
+        <AppNavbar />
+        <Container className="py-5 text-center">
+          <FiShoppingCart size={64} className="text-muted mb-3" />
+          <h4>Your cart is waiting</h4>
+          <p className="text-muted">Please log in to view your cart.</p>
+          <Button variant="primary" onClick={() => navigate('/auth/login')}>
+            Login to Continue
+          </Button>
+        </Container>
+        <Footer />
+      </>
+    );
+  }
+
+  if (loading) {
+    return (
+      <>
+        <AppNavbar />
+        <div className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+          <Spinner animation="border" variant="primary" />
+        </div>
+        <Footer />
+      </>
+    );
+  }
+
+  const handleQuantityChange = async (cartItemId, newQty) => {
+    if (newQty < 1) return;
+    const result = await dispatch(updateCartItemThunk({ cartItemId, quantity: newQty }));
+    if (updateCartItemThunk.rejected.match(result)) {
+      toast.error(result.payload || 'Could not update quantity');
+    }
+  };
+
+  const handleRemove = async (cartItemId, productName) => {
+    const result = await dispatch(removeCartItemThunk(cartItemId));
+    if (removeCartItemThunk.fulfilled.match(result)) {
+      toast.info(`"${productName}" removed from cart`);
+    } else {
+      toast.error('Could not remove item');
+    }
+  };
+
+  const handleClearCart = async () => {
+    if (!window.confirm('Clear all items from your cart?')) return;
+    await dispatch(clearCartThunk());
+    toast.info('Cart cleared');
+  };
+
+  const handleCheckout = () => {
+    if (hasOutOfStock) {
+      toast.warning('Please remove out-of-stock items before checking out.');
+      return;
+    }
+    navigate('/checkout');
+  };
+
+  // Empty cart
+  if (!items.length) {
+    return (
+      <>
+        <AppNavbar />
+        <Container className="py-5 text-center">
+          <FiShoppingCart size={64} className="text-muted mb-3" />
+          <h4>Your cart is empty</h4>
+          <p className="text-muted">Add some products to get started.</p>
+          <Button variant="primary" onClick={() => navigate('/products')}>
+            Browse Products
+          </Button>
+        </Container>
+        <Footer />
+      </>
+    );
+  }
+
+  const deliveryAddress = user?.address;
+
+  return (
+    <div className="d-flex flex-column min-vh-100">
+      <AppNavbar />
+
+      <Container fluid="xl" className="py-4 flex-grow-1">
+        <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h4 className="fw-bold mb-0">
+            Shopping Cart{' '}
+            <Badge bg="secondary" pill>{totalItems} item{totalItems !== 1 ? 's' : ''}</Badge>
+          </h4>
+          <Button
+            variant="outline-danger"
+            size="sm"
+            onClick={handleClearCart}
+            disabled={mutating}
+          >
+            <FiTrash2 className="me-1" /> Clear Cart
+          </Button>
+        </div>
+
+        {/* Alerts */}
+        {hasOutOfStock && (
+          <Alert variant="warning" className="py-2">
+            ⚠️ Some items are out of stock. Please remove them before checkout.
+          </Alert>
+        )}
+        {hasPriceChanges && (
+          <Alert variant="info" className="py-2">
+            ℹ️ Prices for some items have changed since you added them.
+          </Alert>
+        )}
+
+        <Row className="g-4">
+          {/* ── Cart Items ──────────────────────────────────────── */}
+          <Col lg={8}>
+            <Card className="border-0 shadow-sm">
+              <Card.Body className="p-0">
+                {items.map((item, idx) => (
+                  <div
+                    key={item.cartItemId}
+                    className={`p-3 ${idx < items.length - 1 ? 'border-bottom' : ''}`}
+                  >
+                    <Row className="align-items-center g-3">
+                      {/* Image */}
+                      <Col xs={3} sm={2}>
+                        <Link to={`/products/${item.productSlug}`}>
+                          <Image
+                            src={item.mainImageUrl || PLACEHOLDER}
+                            alt={item.productName}
+                            rounded
+                            style={{ width: '70px', height: '70px', objectFit: 'cover' }}
+                            onError={(e) => { e.target.src = PLACEHOLDER; }}
+                          />
+                        </Link>
+                      </Col>
+
+                      {/* Name + badges */}
+                      <Col xs={9} sm={5}>
+                        <Link
+                          to={`/products/${item.productSlug}`}
+                          className="text-decoration-none text-dark fw-semibold"
+                        >
+                          {item.productName}
+                        </Link>
+                        <div className="mt-1 d-flex flex-wrap gap-1">
+                          {item.isOutOfStock && (
+                            <Badge bg="danger" pill style={{ fontSize: '0.7rem' }}>Out of Stock</Badge>
+                          )}
+                          {item.hasPriceChanged && !item.isOutOfStock && (
+                            <Badge bg="warning" text="dark" pill style={{ fontSize: '0.7rem' }}>
+                              Price changed
+                            </Badge>
+                          )}
+                          {!item.isActiveProduct && (
+                            <Badge bg="secondary" pill style={{ fontSize: '0.7rem' }}>Unavailable</Badge>
+                          )}
+                        </div>
+                        {item.hasPriceChanged && (
+                          <small className="text-muted d-block">
+                            Was ₹{item.priceAtAddition?.toLocaleString('en-IN')}
+                          </small>
+                        )}
+                      </Col>
+
+                      {/* Qty controls */}
+                      <Col xs={6} sm={3}>
+                        <div className="d-flex align-items-center gap-1">
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => handleQuantityChange(item.cartItemId, item.quantity - 1)}
+                            disabled={mutating || item.quantity <= 1}
+                            style={{ width: '30px', height: '30px', padding: 0 }}
+                          >
+                            <FiMinus size={12} />
+                          </Button>
+                          <span
+                            className="text-center fw-bold"
+                            style={{ minWidth: '28px', fontSize: '0.9rem' }}
+                          >
+                            {item.quantity}
+                          </span>
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => handleQuantityChange(item.cartItemId, item.quantity + 1)}
+                            disabled={mutating || item.quantity >= item.availableStock}
+                            style={{ width: '30px', height: '30px', padding: 0 }}
+                          >
+                            <FiPlus size={12} />
+                          </Button>
+                        </div>
+                        <small className="text-muted d-block mt-1" style={{ fontSize: '0.7rem' }}>
+                          {item.availableStock} available
+                        </small>
+                      </Col>
+
+                      {/* Line total + remove */}
+                      <Col xs={6} sm={2} className="text-end">
+                        <div className="fw-bold text-primary">
+                          ₹{item.lineTotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </div>
+                        <small className="text-muted d-block" style={{ fontSize: '0.75rem' }}>
+                          ₹{item.currentUnitPrice?.toLocaleString('en-IN')} each
+                        </small>
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="text-danger p-0 mt-1"
+                          onClick={() => handleRemove(item.cartItemId, item.productName)}
+                          disabled={mutating}
+                        >
+                          <FiTrash2 size={14} />
+                        </Button>
+                      </Col>
+                    </Row>
+                  </div>
+                ))}
+              </Card.Body>
+            </Card>
+          </Col>
+
+          {/* ── Order Summary ────────────────────────────────────── */}
+          <Col lg={4}>
+            <Card className="border-0 shadow-sm mb-3">
+              <Card.Header className="bg-white fw-bold">Order Summary</Card.Header>
+              <Card.Body>
+                <Table borderless size="sm" className="mb-0">
+                  <tbody>
+                    {items.map((item) => (
+                      <tr key={item.cartItemId}>
+                        <td className="text-muted small" style={{ maxWidth: '160px' }}>
+                          <span
+                            className="d-inline-block text-truncate"
+                            style={{ maxWidth: '140px' }}
+                          >
+                            {item.productName}
+                          </span>
+                          <span className="ms-1 text-muted">×{item.quantity}</span>
+                        </td>
+                        <td className="text-end small fw-semibold">
+                          ₹{item.lineTotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={2}><hr className="my-2" /></td>
+                    </tr>
+                    <tr>
+                      <td className="fw-bold">Subtotal</td>
+                      <td className="text-end fw-bold text-primary fs-5">
+                        ₹{subtotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small">Delivery</td>
+                      <td className="text-end text-success small">Calculated at checkout</td>
+                    </tr>
+                  </tbody>
+                </Table>
+              </Card.Body>
+            </Card>
+
+            {/* Delivery Address */}
+            <Card className="border-0 shadow-sm mb-3">
+              <Card.Header className="bg-white fw-bold">Delivery Address</Card.Header>
+              <Card.Body>
+                {deliveryAddress ? (
+                  <address className="mb-0 small">
+                    <strong>{user?.firstName} {user?.lastName}</strong><br />
+                    {deliveryAddress.street && <>{deliveryAddress.street}<br /></>}
+                    {deliveryAddress.city && <>{deliveryAddress.city}, </>}
+                    {deliveryAddress.state && <>{deliveryAddress.state}<br /></>}
+                    {deliveryAddress.postalCode && <>{deliveryAddress.postalCode}<br /></>}
+                    {deliveryAddress.country}
+                  </address>
+                ) : (
+                  <div className="text-muted small">
+                    <p className="mb-1">No delivery address saved.</p>
+                    <p className="mb-0">You can add your address during checkout.</p>
+                  </div>
+                )}
+              </Card.Body>
+            </Card>
+
+            {/* Checkout button */}
+            <div className="d-grid">
+              <Button
+                variant="success"
+                size="lg"
+                onClick={handleCheckout}
+                disabled={mutating || hasOutOfStock || !items.length}
+                className="d-flex align-items-center justify-content-center gap-2"
+              >
+                {mutating
+                  ? <Spinner animation="border" size="sm" />
+                  : <>Proceed to Checkout <FiArrowRight /></>
+                }
+              </Button>
+              {hasOutOfStock && (
+                <small className="text-danger text-center mt-1">
+                  Remove out-of-stock items to continue
+                </small>
+              )}
+            </div>
+          </Col>
+        </Row>
+      </Container>
+
+      <Footer />
+    </div>
+  );
+};
+
+export default CartPage;
+
+
+====================================================================================================
+FILE: frontend/src/components/layout/Navbar.jsx
+====================================================================================================
+
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, Link } from 'react-router-dom';
+import {
+  Navbar as BsNavbar,
+  Container,
+  Nav,
+  Button,
+  Dropdown,
+} from 'react-bootstrap';
+import { FiUser, FiLogOut, FiLogIn } from 'react-icons/fi';
+import { toast } from 'react-toastify';
+import SearchBar from '../common/SearchBar.jsx';
+import CartIcon from '../cart/CartIcon.jsx';
+import { logoutThunk } from '../../store/slices/authSlice.js';
+import {
+  selectIsAuthenticated,
+  selectCurrentUser,
+} from '../../store/slices/authSlice.js';
+import { resetCart } from '../../store/slices/cartSlice.js';
+
+const AppNavbar = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const isAuthenticated = useSelector(selectIsAuthenticated);
+  const user = useSelector(selectCurrentUser);
+
+  const handleLogout = async () => {
+    await dispatch(logoutThunk());
+    dispatch(resetCart());
+    toast.success('Logged out successfully');
+    navigate('/');
+  };
+
+  return (
+    <BsNavbar bg="dark" variant="dark" expand="lg" sticky="top" className="shadow-sm">
+      <Container fluid="xl">
+        {/* Brand */}
+        <BsNavbar.Brand as={Link} to="/" className="fw-bold fs-4 me-4">
+          🛒 ShopMaster
+        </BsNavbar.Brand>
+
+        <BsNavbar.Toggle aria-controls="main-navbar" />
+
+        <BsNavbar.Collapse id="main-navbar">
+          {/* Search — takes up remaining space */}
+          <div className="flex-grow-1 my-2 my-lg-0 me-lg-3">
+            <SearchBar />
+          </div>
+
+          <Nav className="align-items-center gap-2 ms-auto">
+            <CartIcon />
+
+            {isAuthenticated ? (
+              <Dropdown align="end">
+                <Dropdown.Toggle
+                  variant="outline-light"
+                  id="user-menu"
+                  className="d-flex align-items-center gap-2"
+                >
+                  <FiUser />
+                  <span className="d-none d-lg-inline">
+                    {user?.firstName || user?.email || 'Account'}
+                  </span>
+                </Dropdown.Toggle>
+                <Dropdown.Menu>
+                  <Dropdown.Item as={Link} to="/cart">
+                    My Cart
+                  </Dropdown.Item>
+                  <Dropdown.Divider />
+                  <Dropdown.Item onClick={handleLogout} className="text-danger">
+                    <FiLogOut className="me-2" />
+                    Logout
+                  </Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown>
+            ) : (
+              <Button
+                variant="outline-light"
+                size="sm"
+                onClick={() => navigate('/auth/login')}
+                className="d-flex align-items-center gap-2"
+              >
+                <FiLogIn />
+                <span>Login</span>
+              </Button>
+            )}
+          </Nav>
+        </BsNavbar.Collapse>
+      </Container>
+    </BsNavbar>
+  );
+};
+
+export default AppNavbar;
+
+
+====================================================================================================
+FILE: frontend/src/pages/HomePage.jsx
+====================================================================================================
+
+import { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
+import { Container, Row, Col, Button, Spinner } from 'react-bootstrap';
+import { FiArrowRight } from 'react-icons/fi';
+import AppNavbar from '../components/layout/Navbar.jsx';
+import Footer from '../components/layout/Footer.jsx';
+import CategorySection from '../components/product/CategorySection.jsx';
+import BestsellerSection from '../components/product/BestsellerSection.jsx';
+import ProductGrid from '../components/product/ProductGrid.jsx';
+import {
+  fetchProductsThunk,
+  fetchCategoriesThunk,
+  selectProducts,
+  selectListLoading,
+  selectListError,
+} from '../store/slices/productSlice.js';
+
+const HomePage = () => {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const products = useSelector(selectProducts);
+  const loading = useSelector(selectListLoading);
+  const error = useSelector(selectListError);
+
+  useEffect(() => {
+    dispatch(fetchCategoriesThunk());
+    dispatch(fetchProductsThunk({ pageNumber: 1, pageSize: 8, sortBy: 'createdAt', sortDescending: true }));
+  }, [dispatch]);
+
+  return (
+    <div className="d-flex flex-column min-vh-100">
+      <AppNavbar />
+
+      {/* Hero */}
+      <section
+        className="text-white text-center py-5"
+        style={{
+          background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
+          minHeight: '280px',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        <Container>
+          <h1 className="display-5 fw-bold mb-3">Find Everything You Need</h1>
+          <p className="lead text-white-50 mb-4">
+            Thousands of products. Unbeatable prices. Fast delivery.
+          </p>
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={() => navigate('/products')}
+            className="px-5"
+          >
+            Shop Now <FiArrowRight className="ms-2" />
+          </Button>
+        </Container>
+      </section>
+
+      {/* Categories */}
+      <CategorySection />
+
+      {/* Bestsellers */}
+      <BestsellerSection />
+
+      {/* Featured / New Arrivals */}
+      <section className="py-4">
+        <Container fluid="xl">
+          <div className="d-flex justify-content-between align-items-center mb-3">
+            <h4 className="fw-bold mb-0">New Arrivals</h4>
+            <Button
+              variant="outline-primary"
+              size="sm"
+              onClick={() => navigate('/products')}
+              className="d-flex align-items-center gap-1"
+            >
+              View All <FiArrowRight />
+            </Button>
+          </div>
+          <ProductGrid
+            products={products}
+            loading={loading}
+            error={error}
+            emptyMessage="No products available right now."
+          />
+        </Container>
+      </section>
+
+      <Footer />
+    </div>
+  );
+};
+
+export default HomePage;
+
+
+====================================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/AddressesController.cs
+====================================================================================================
+
+using EcommerceApp.Application.Features.Addresses.Commands;
+using EcommerceApp.Application.Features.Addresses.DTOs;
+using EcommerceApp.Application.Features.Addresses.Queries;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+
+namespace EcommerceApp.API.Controllers.v1;
+
+[ApiController]
+[Route("api/v1/addresses")]
+[Authorize]
+[EnableRateLimiting("general")]
+public class AddressesController : ControllerBase
+{
+    private readonly ISender _sender;
+
+    public AddressesController(ISender sender)
+    {
+        _sender = sender;
+    }
+
+    /// <summary>
+    /// GET api/v1/addresses
+    /// Returns all saved addresses for the authenticated user.
+    /// Default address is always first in the list.
+    /// </summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<AddressDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<IReadOnlyList<AddressDto>>> GetAddresses(
         CancellationToken cancellationToken)
     {
-        var userId = _currentUserService.UserId
-            ?? throw new UnauthorizedException("User is not authenticated.");
-
-        var user = await _unitOfWork.Users.GetWithAddressesAsync(userId, cancellationToken)
-            ?? throw new NotFoundException("User", userId);
-
-        var cart = await _unitOfWork.Carts.GetWithItemsAndProductsAsync(userId, cancellationToken)
-            ?? throw new ValidationException("Cart is empty.");
-
-        var activeItems = cart.Items
-            .Where(i => !i.IsDeleted)
-            .ToList();
-
-        if (activeItems.Count == 0)
-            throw new ValidationException("Cart is empty.");
-
-        foreach (var item in activeItems)
-        {
-            if (item.Product == null)
-                throw new NotFoundException("Product", item.ProductId);
-
-            if (!item.Product.IsActive)
-                throw new ValidationException(
-                    $"Product '{item.Product.Name}' is inactive and cannot be checked out.");
-
-            if (item.Quantity > item.Product.AvailableStock)
-            {
-                throw new ValidationException(
-                    $"Insufficient stock for '{item.Product.Name}'. Requested {item.Quantity}, available {item.Product.AvailableStock}.");
-            }
-        }
-
-        var address = request.AddressId.HasValue
-            ? user.Addresses.FirstOrDefault(a => a.Id == request.AddressId.Value && !a.IsDeleted)
-            : user.Addresses.FirstOrDefault(a => a.IsDefault && !a.IsDeleted);
-
-        if (address == null)
-            throw new ValidationException("A valid shipping address is required for checkout.");
-
-        var subTotal = activeItems.Sum(x => x.Product.EffectivePrice * x.Quantity);
-        var totalAmount = subTotal;
-
-        var orderNumber = await _unitOfWork.Orders.GenerateOrderNumberAsync(cancellationToken);
-
-        var addressSnapshot = JsonSerializer.Serialize(new
-        {
-            address.Id,
-            address.FullName,
-            address.PhoneNumber,
-            address.AddressLine1,
-            address.AddressLine2,
-            address.City,
-            address.State,
-            address.PostalCode,
-            address.Country,
-            address.AddressType
-        });
-
-        var order = new Order
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId,
-            OrderNumber = orderNumber,
-            SubTotal = subTotal,
-            DiscountAmount = 0,
-            ShippingAmount = 0,
-            TaxAmount = 0,
-            TotalAmount = totalAmount,
-            PaymentStatus = PaymentStatus.Pending,
-            TrackingStatus = TrackingStatus.Placed,
-            ShippingAddressSnapshot = addressSnapshot,
-            EstimatedDeliveryDate = DateTime.UtcNow.AddDays(7),
-            Items = activeItems.Select(item => new OrderItem
-            {
-                ProductId = item.ProductId,
-                ProductName = item.Product.Name,
-                ProductImageUrl = item.Product.ImageUrls.FirstOrDefault(),
-                ProductSlug = item.Product.Slug,
-                UnitPrice = item.Product.Price,
-                DiscountedUnitPrice = item.Product.DiscountedPrice,
-                Quantity = item.Quantity,
-                TotalPrice = item.Product.EffectivePrice * item.Quantity
-            }).ToList()
-        };
-
-        var stripeRequest = new StripeCheckoutSessionRequest(
-            CustomerEmail: user.Email,
-            Currency: _stripeSettings.Currency,
-            SuccessUrl: _stripeSettings.SuccessUrl,
-            CancelUrl: _stripeSettings.CancelUrl,
-            Items: activeItems.Select(item => new StripeCheckoutLineItem(
-                Name: item.Product.Name,
-                Description: item.Product.ShortDescription,
-                ImageUrl: item.Product.ImageUrls.FirstOrDefault(),
-                UnitAmount: ToStripeAmount(item.Product.EffectivePrice),
-                Quantity: item.Quantity
-            )).ToList(),
-            Metadata: new Dictionary<string, string>
-            {
-                ["orderId"] = order.Id.ToString(),
-                ["orderNumber"] = order.OrderNumber,
-                ["userId"] = userId.ToString()
-            });
-
-        return await _checkoutTransactionExecutor.ExecuteAsync(async ct =>
-        {
-            var stripeSession = await _stripePaymentService.CreateCheckoutSessionAsync(
-                stripeRequest,
-                ct);
-
-            order.StripeSessionId = stripeSession.SessionId;
-            order.StripePaymentIntentId = stripeSession.PaymentIntentId;
-
-            await _unitOfWork.Orders.AddAsync(order, ct);
-
-            foreach (var item in activeItems)
-            {
-                item.Product.ReservedQuantity += item.Quantity;
-                await _unitOfWork.Products.UpdateAsync(item.Product, ct);
-
-                var reservation = new StockReservation
-                {
-                    ProductId = item.ProductId,
-                    UserId = userId,
-                    Quantity = item.Quantity,
-                    StripeSessionId = stripeSession.SessionId,
-                    ExpiresAt = DateTime.UtcNow.AddMinutes(30),
-                    IsReleased = false
-                };
-
-                await _unitOfWork.StockReservations.AddAsync(reservation, ct);
-            }
-
-            cart.LastActivityAt = DateTime.UtcNow;
-            await _unitOfWork.Carts.UpdateAsync(cart, ct);
-
-            return new CheckoutSessionResponseDto
-            {
-                OrderId = order.Id,
-                OrderNumber = order.OrderNumber,
-                SessionId = stripeSession.SessionId,
-                SessionUrl = stripeSession.SessionUrl
-            };
-        }, cancellationToken);
+        var result = await _sender.Send(new GetAddressesQuery(), cancellationToken);
+        return Ok(result);
     }
 
-    private static long ToStripeAmount(decimal amount)
-        => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
-}
-
-
-================================================================================
-FILE: src/EcommerceApp.Application/Common/Mappings/MappingProfile.cs
-================================================================================
-
-using AutoMapper;
-
-namespace EcommerceApp.Application.Common.Mappings;
-
-/// <summary>
-/// Base AutoMapper profile for the Application layer.
-///
-/// Contains only common type converters and mapping conventions.
-/// Entity-to-DTO mappings live in each feature's own Mappings/ folder
-/// (e.g. Features/Auth/Mappings/AuthMappingProfile.cs) and are discovered
-/// automatically by AddAutoMapper(Assembly.GetExecutingAssembly()) in
-/// DependencyInjection.cs.
-///
-/// DO NOT add feature-specific mappings here � keep this file thin.
-/// </summary>
-public class MappingProfile : Profile
-{
-    public MappingProfile()
+    /// <summary>
+    /// POST api/v1/addresses
+    /// Adds a new address to the user's saved addresses.
+    /// If this is the first address, it is automatically set as default.
+    /// </summary>
+    [HttpPost]
+    [ProducesResponseType(typeof(AddressDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<AddressDto>> AddAddress(
+        [FromBody] AddAddressRequest request,
+        CancellationToken cancellationToken)
     {
-        // -- DateTime normalization ---------------------------------------------
-        // Always store and return UTC. If a DateTime without a Kind arrives,
-        // we treat it as UTC to prevent timezone confusion.
+        var command = new AddAddressCommand(
+            request.FullName,
+            request.PhoneNumber,
+            request.AddressLine1,
+            request.AddressLine2,
+            request.City,
+            request.State,
+            request.PostalCode,
+            request.Country,
+            request.AddressType,
+            request.IsDefault);
 
-        CreateMap<DateTime, DateTime>()
-            .ConvertUsing(d =>
-                d.Kind == DateTimeKind.Utc
-                    ? d
-                    : DateTime.SpecifyKind(d, DateTimeKind.Utc));
+        var result = await _sender.Send(command, cancellationToken);
 
-        CreateMap<DateTime?, DateTime?>()
-            .ConvertUsing(d =>
-                d.HasValue
-                    ? d.Value.Kind == DateTimeKind.Utc
-                        ? d
-                        : DateTime.SpecifyKind(d.Value, DateTimeKind.Utc)
-                    : null);
+        return CreatedAtAction(
+            nameof(GetAddresses),
+            new { },
+            result);
+    }
+
+    /// <summary>
+    /// PUT api/v1/addresses/{addressId}
+    /// Updates all fields of an existing address.
+    /// </summary>
+    [HttpPut("{addressId:guid}")]
+    [ProducesResponseType(typeof(AddressDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AddressDto>> UpdateAddress(
+        Guid addressId,
+        [FromBody] UpdateAddressRequest request,
+        CancellationToken cancellationToken)
+    {
+        var command = new UpdateAddressCommand(
+            addressId,
+            request.FullName,
+            request.PhoneNumber,
+            request.AddressLine1,
+            request.AddressLine2,
+            request.City,
+            request.State,
+            request.PostalCode,
+            request.Country,
+            request.AddressType,
+            request.IsDefault);
+
+        var result = await _sender.Send(command, cancellationToken);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// DELETE api/v1/addresses/{addressId}
+    /// Soft-deletes an address. If it was the default, the next oldest
+    /// address is automatically promoted to default.
+    /// </summary>
+    [HttpDelete("{addressId:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteAddress(
+        Guid addressId,
+        CancellationToken cancellationToken)
+    {
+        await _sender.Send(new DeleteAddressCommand(addressId), cancellationToken);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// PATCH api/v1/addresses/{addressId}/set-default
+    /// Promotes the given address to default and demotes the previous default.
+    /// Use this from the checkout screen's "Change address" UI.
+    /// </summary>
+    [HttpPatch("{addressId:guid}/set-default")]
+    [ProducesResponseType(typeof(AddressDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AddressDto>> SetDefault(
+        Guid addressId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _sender.Send(
+            new SetDefaultAddressCommand(addressId), cancellationToken);
+        return Ok(result);
+    }
+
+    // -------------------------------------------------------------------------
+    // Request models (kept here since they are controller-specific)
+    // -------------------------------------------------------------------------
+
+    public class AddAddressRequest
+    {
+        public string FullName { get; set; } = string.Empty;
+        public string PhoneNumber { get; set; } = string.Empty;
+        public string AddressLine1 { get; set; } = string.Empty;
+        public string? AddressLine2 { get; set; }
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+        public string PostalCode { get; set; } = string.Empty;
+        public string Country { get; set; } = string.Empty;
+        public string AddressType { get; set; } = "Home";
+        public bool IsDefault { get; set; } = false;
+    }
+
+    public class UpdateAddressRequest
+    {
+        public string FullName { get; set; } = string.Empty;
+        public string PhoneNumber { get; set; } = string.Empty;
+        public string AddressLine1 { get; set; } = string.Empty;
+        public string? AddressLine2 { get; set; }
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+        public string PostalCode { get; set; } = string.Empty;
+        public string Country { get; set; } = string.Empty;
+        public string AddressType { get; set; } = "Home";
+        public bool IsDefault { get; set; } = false;
     }
 }
 
 
-================================================================================
-FILE: src/EcommerceApp.Application/DependencyInjection.cs
-================================================================================
+====================================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/CartController.cs
+====================================================================================================
 
-using EcommerceApp.Application.Common.Behaviors;
-using FluentValidation;
+using EcommerceApp.Application.Features.Cart.Commands;
+using EcommerceApp.Application.Features.Cart.DTOs;
+using EcommerceApp.Application.Features.Cart.Queries;
 using MediatR;
-using Microsoft.Extensions.DependencyInjection;
-using System.Reflection;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
-namespace EcommerceApp.Application;
+namespace EcommerceApp.API.Controllers.v1;
 
-/// <summary>
-/// Registers all Application layer services into the DI container.
-/// Called once from Program.cs: services.AddApplication();
-/// </summary>
-public static class DependencyInjection
+[ApiController]
+[Route("api/v1/cart")]
+[Authorize]
+public class CartController : ControllerBase
 {
-    public static IServiceCollection AddApplication(
-        this IServiceCollection services)
+    private readonly ISender _sender;
+
+    public CartController(ISender sender)
     {
-        var assembly = Assembly.GetExecutingAssembly();
+        _sender = sender;
+    }
 
-        // -- AutoMapper --------------------------------------------------------
-        // Scans this assembly for all classes that inherit from Profile.
-        // This picks up:
-        //   - Common/Mappings/MappingProfile.cs
-        //   - Features/Auth/Mappings/AuthMappingProfile.cs
-        //   - Features/Products/Mappings/ProductMappingProfile.cs
-        //   - ... all other feature mapping profiles added in later parts
-        services.AddAutoMapper(assembly);
+    [HttpGet]
+    [ProducesResponseType(typeof(CartDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetCart(CancellationToken ct)
+    {
+        var result = await _sender.Send(new GetCartQuery(), ct);
+        return Ok(result);
+    }
 
-        // -- MediatR -----------------------------------------------------------
-        // Scans this assembly for all:
-        //   - IRequestHandler<TRequest, TResponse> (command + query handlers)
-        //   - INotificationHandler<TNotification>  (domain event handlers)
-        services.AddMediatR(cfg =>
-            cfg.RegisterServicesFromAssembly(assembly));
+    [HttpPost]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> AddToCart(
+        [FromBody] AddToCartRequest request,
+        CancellationToken ct)
+    {
+        await _sender.Send(new AddToCartCommand(request.ProductId, request.Quantity), ct);
+        return Ok(new { message = "Item added to cart." });
+    }
 
-        // -- Pipeline behaviors ------------------------------------------------
-        // Registered in outermost-first order:
-        //
-        // Request  ?  LoggingBehavior
-        //             ?  PerformanceBehavior
-        //                 ?  ValidationBehavior
-        //                     ?  Handler
-        //                 ?  ValidationBehavior
-        //             ?  PerformanceBehavior (records elapsed time)
-        //         ?  LoggingBehavior (logs success or failure)
-        // Response ?
+    [HttpPut("{cartItemId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateCartItem(
+        Guid cartItemId,
+        [FromBody] UpdateCartItemRequest request,
+        CancellationToken ct)
+    {
+        await _sender.Send(new UpdateCartItemCommand(cartItemId, request.Quantity), ct);
+        return Ok(new { message = "Cart item updated." });
+    }
 
-        services.AddTransient(
-            typeof(IPipelineBehavior<,>),
-            typeof(LoggingBehavior<,>));
+    [HttpDelete("{cartItemId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveCartItem(Guid cartItemId, CancellationToken ct)
+    {
+        await _sender.Send(new RemoveCartItemCommand(cartItemId), ct);
+        return Ok(new { message = "Cart item removed." });
+    }
 
-        services.AddTransient(
-            typeof(IPipelineBehavior<,>),
-            typeof(PerformanceBehavior<,>));
+    [HttpDelete]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ClearCart(CancellationToken ct)
+    {
+        await _sender.Send(new ClearCartCommand(), ct);
+        return Ok(new { message = "Cart cleared." });
+    }
 
-        services.AddTransient(
-            typeof(IPipelineBehavior<,>),
-            typeof(ValidationBehavior<,>));
+    public class AddToCartRequest
+    {
+        public Guid ProductId { get; set; }
+        public int Quantity { get; set; }
+    }
 
-        // -- FluentValidation --------------------------------------------------
-        // Scans this assembly for all IValidator<T> implementations.
-        // includeInternalTypes: true � picks up validators in nested classes
-        // and internal validators used as child validators.
-        services.AddValidatorsFromAssembly(
-            assembly,
-            includeInternalTypes: true);
-
-        return services;
+    public class UpdateCartItemRequest
+    {
+        public int Quantity { get; set; }
     }
 }
 
 
-================================================================================
-FILE: src/EcommerceApp.Infrastructure/Persistence/AppDbContext.cs
-================================================================================
+====================================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/OrdersController.cs
+====================================================================================================
 
-using EcommerceApp.Application.Common;
-using EcommerceApp.Domain.Common;
-using EcommerceApp.Domain.Entities;
-using Microsoft.EntityFrameworkCore;
-using System.Reflection;
+using EcommerceApp.Application.Features.Orders.DTOs;
+using EcommerceApp.Application.Features.Orders.Queries;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
-namespace EcommerceApp.Infrastructure.Persistence;
+namespace EcommerceApp.API.Controllers.v1;
 
-public class AppDbContext : DbContext
+[ApiController]
+[Route("api/v1/orders")]
+[Authorize]
+public class OrdersController : ControllerBase
 {
-    private readonly ICurrentUserService _currentUserService;
+    private readonly ISender _sender;
 
-    public AppDbContext(
-        DbContextOptions<AppDbContext> options,
-        ICurrentUserService currentUserService)
-        : base(options)
+    public OrdersController(ISender sender)
     {
-        _currentUserService = currentUserService;
+        _sender = sender;
     }
 
-    // -- DbSets ----------------------------------------------------------------
-    public DbSet<User> Users => Set<User>();
-    public DbSet<OtpStore> OtpStores => Set<OtpStore>();
-    public DbSet<TokenStore> TokenStores => Set<TokenStore>();
-    public DbSet<Product> Products => Set<Product>();
-    public DbSet<CartItem> CartItems => Set<CartItem>();
-    public DbSet<ElasticStore> ElasticStores => Set<ElasticStore>();
-    public DbSet<Cart> Carts => Set<Cart>();
-    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
-    public DbSet<Order> Orders => Set<Order>();
-    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
-    public DbSet<Address> Addresses => Set<Address>();
-    public DbSet<Banner> Banners => Set<Banner>();
-    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
-    public DbSet<Wishlist> Wishlists => Set<Wishlist>();
-    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
-    public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    [HttpGet("{orderId:guid}")]
+    [ProducesResponseType(typeof(OrderDetailsDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<OrderDetailsDto>> GetOrderDetails(
+        Guid orderId,
+        CancellationToken cancellationToken)
     {
-        // Scans this assembly and applies every IEntityTypeConfiguration<T> class.
-        // Each configuration is responsible for its own query filter,
-        // column types, indexes, and FK relationships.
-        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+        var result = await _sender.Send(
+            new GetOrderDetailsQuery(orderId),
+            cancellationToken);
 
-        base.OnModelCreating(modelBuilder);
-    }
-
-    // -- Audit field auto-population -------------------------------------------
-    public override async Task<int> SaveChangesAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var now = DateTime.UtcNow;
-        var userId = _currentUserService.UserId;
-
-        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
-        {
-            switch (entry.State)
-            {
-                case EntityState.Added:
-                    entry.Entity.CreatedAt = now;
-                    entry.Entity.UpdatedAt = now;
-                    entry.Entity.CreatedBy = userId;
-                    entry.Entity.UpdatedBy = userId;
-                    entry.Entity.IsDeleted = false;
-                    break;
-
-                case EntityState.Modified:
-                    entry.Entity.UpdatedAt = now;
-                    entry.Entity.UpdatedBy = userId;
-                    // Never allow overwriting the original author / timestamp
-                    entry.Property(e => e.CreatedAt).IsModified = false;
-                    entry.Property(e => e.CreatedBy).IsModified = false;
-                    break;
-            }
-        }
-
-        return await base.SaveChangesAsync(cancellationToken);
+        return Ok(result);
     }
 }
 
 
-================================================================================
-FILE: src/EcommerceApp.Infrastructure/Persistence/Configurations/AddressConfiguration.cs
-================================================================================
-
-using EcommerceApp.Domain.Entities;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Builders;
-
-namespace EcommerceApp.Infrastructure.Persistence.Configurations;
-
-public class AddressConfiguration : IEntityTypeConfiguration<Address>
-{
-    public void Configure(EntityTypeBuilder<Address> builder)
-    {
-        builder.ToTable("Addresses");
-
-        builder.HasKey(a => a.Id);
-
-        // -- Properties --------------------------------------------------------
-        builder.Property(a => a.FullName)
-            .IsRequired()
-            .HasMaxLength(200);
-
-        builder.Property(a => a.PhoneNumber)
-            .IsRequired()
-            .HasMaxLength(20);
-
-        builder.Property(a => a.AddressLine1)
-            .IsRequired()
-            .HasMaxLength(200);
-
-        builder.Property(a => a.AddressLine2)
-            .HasMaxLength(200);
-
-        builder.Property(a => a.City)
-            .IsRequired()
-            .HasMaxLength(100);
-
-        builder.Property(a => a.State)
-            .IsRequired()
-            .HasMaxLength(100);
-
-        builder.Property(a => a.PostalCode)
-            .IsRequired()
-            .HasMaxLength(20);
-
-        builder.Property(a => a.Country)
-            .IsRequired()
-            .HasMaxLength(100);
-
-        builder.Property(a => a.AddressType)
-            .IsRequired()
-            .HasMaxLength(20)
-            .HasDefaultValue("Home");
-
-        builder.Property(a => a.CreatedAt).IsRequired();
-        builder.Property(a => a.UpdatedAt).IsRequired();
-
-        // -- Indexes -----------------------------------------------------------
-        builder.HasIndex(a => a.UserId)
-            .HasDatabaseName("IX_Addresses_UserId");
-
-        // Default address lookup � used in checkout pre-population
-        builder.HasIndex(a => new { a.UserId, a.IsDefault })
-            .HasDatabaseName("IX_Addresses_UserId_IsDefault");
-
-        // -- Soft-delete query filter ------------------------------------------
-        builder.HasQueryFilter(a => !a.IsDeleted);
-
-        // -- Relationships -----------------------------------------------------
-        builder.HasOne(a => a.User)
-            .WithMany(u => u.Addresses)
-            .HasForeignKey(a => a.UserId)
-            .OnDelete(DeleteBehavior.Restrict);
-    }
-}
-
-
-================================================================================
-FILE: src/EcommerceApp.Infrastructure/DependencyInjection.cs
-================================================================================
-
-using EcommerceApp.Application.Common;
-using EcommerceApp.Domain.Interfaces;
-using EcommerceApp.Infrastructure.Auth;
-using EcommerceApp.Infrastructure.Persistence;
-using EcommerceApp.Infrastructure.Persistence.Repositories;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using EcommerceApp.Infrastructure.Notifications;
-using EcommerceApp.Application.Common.Interfaces;
-using EcommerceApp.Application.Interfaces;
-using EcommerceApp.Infrastructure.BackgroundServices;
-using EcommerceApp.Infrastructure.Search;
-using Microsoft.Extensions.Options;
-using Nest;
-using EcommerceApp.Infrastructure.Payments;
-
-namespace EcommerceApp.Infrastructure;
-
-
-public static class DependencyInjection
-{
-    public static IServiceCollection AddInfrastructure(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        services
-            .AddDatabase(configuration)
-            .AddAuthServices(configuration)
-            .AddRepositories()
-            .AddNotifications(configuration)
-            .AddSearch(configuration)
-            .AddPayments(configuration);
-
-        return services;
-    }
-
-
-    //Payments
-    private static IServiceCollection AddPayments(
-    this IServiceCollection services,
-    IConfiguration configuration)
-    {
-        services.Configure<StripeSettings>(
-            configuration.GetSection(StripeSettings.SectionName));
-
-        services.AddScoped<IStripePaymentService, StripePaymentService>();
-
-        services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
-
-        return services;
-    }
-
-    // -- Search ----------------------------------------------------------------
-
-    private static IServiceCollection AddSearch(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        // Bind SearchSettings section
-        services.Configure<SearchSettings>(
-            configuration.GetSection(SearchSettings.SectionName));
-
-        var provider = configuration
-            .GetSection(SearchSettings.SectionName)["Provider"] ?? "Sql";
-
-        //Console.WriteLine($"[Search] Provider from config = '{provider}'");
-
-        if (provider.Equals("Elasticsearch", StringComparison.OrdinalIgnoreCase))
-        {
-            // -- Elasticsearch -----------------------------------------------------
-            //Console.WriteLine("[Search] Registered ElasticsearchSearchService");
-            services.AddSingleton<IElasticClient>(sp =>
-            {
-                var settings = sp.GetRequiredService<IOptions<SearchSettings>>().Value;
-
-                var connectionSettings = new ConnectionSettings(new Uri(settings.Uri))
-                    .DefaultIndex(settings.IndexName)
-                    .EnableDebugMode()
-                    .PrettyJson();
-
-                // Add credentials only when configured (production)
-                if (!string.IsNullOrEmpty(settings.Username) &&
-                    !string.IsNullOrEmpty(settings.Password))
-                {
-                    connectionSettings.BasicAuthentication(
-                        settings.Username, settings.Password);
-                }
-
-                return new ElasticClient(connectionSettings);
-            });
-
-            services.AddScoped<ElasticsearchSearchService>();
-            services.AddScoped<ISearchService>(sp =>
-                sp.GetRequiredService<ElasticsearchSearchService>());
-        }
-        else
-        {
-            //Console.WriteLine("[Search] Registered SqlSearchService");
-            // -- SQL fallback ------------------------------------------------------
-            services.AddScoped<SqlSearchService>();
-            services.AddScoped<ISearchService>(sp =>
-                sp.GetRequiredService<SqlSearchService>());
-        }
-
-        // Background sync service � runs regardless of provider
-        // (SQL provider's SyncAllAsync is a no-op, so no wasted work)
-        services.AddHostedService<ProductSearchSyncService>();
-
-        return services;
-    }
-
-    private static IServiceCollection AddNotifications(
-    this IServiceCollection services,
-    IConfiguration configuration)
-    {
-        // Bind "Notifications" section to NotificationSettings
-        services.Configure<NotificationSettings>(
-            configuration.GetSection(NotificationSettings.SectionName));
-
-        // Dev senders � log to console instead of calling real APIs.
-        // In Part 11/12 these are swapped for SendGrid and Twilio
-        // by checking IHostEnvironment.IsProduction() or a feature flag.
-        services.AddTransient<IEmailSender, DevEmailSender>();
-        services.AddTransient<ISmsSender, DevSmsSender>();
-
-        return services;
-    }
-
-    // -- Database --------------------------------------------------------------
-
-    private static IServiceCollection AddDatabase(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        services.AddDbContext<AppDbContext>((sp, options) =>
-        {
-            options.UseSqlServer(
-                configuration.GetConnectionString("DefaultConnection"),
-                sqlOptions =>
-                {
-                    // Retry on transient SQL Server failures (e.g. brief network blips)
-                    sqlOptions.EnableRetryOnFailure(
-                        maxRetryCount: 5,
-                        maxRetryDelay: TimeSpan.FromSeconds(30),
-                        errorNumbersToAdd: null);
-
-                    sqlOptions.MigrationsAssembly(
-                        typeof(AppDbContext).Assembly.FullName);
-                });
-        });
-
-        return services;
-    }
-
-    // -- Auth services ---------------------------------------------------------
-
-    private static IServiceCollection AddAuthServices(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        // Bind "Jwt" section to JwtSettings
-        services.Configure<JwtSettings>(
-            configuration.GetSection(JwtSettings.SectionName));
-
-        // Singleton: stateless � all fields are readonly after construction.
-        // Safe to share across requests.
-        services.AddSingleton<ITokenService, JwtTokenService>();
-
-        // Singleton: stateless (only uses RandomNumberGenerator and BCrypt)
-        services.AddSingleton<IOtpService, OtpService>();
-
-        // Singleton: stateless (only uses BCrypt and Regex)
-        services.AddSingleton<IPasswordService, PasswordService>();
-
-        // Scoped: wraps ITokenStoreRepository and IUnitOfWork which are both scoped
-        services.AddScoped<SessionService>();
-
-        return services;
-    }
-
-    // -- Repositories ----------------------------------------------------------
-
-    private static IServiceCollection AddRepositories(
-        this IServiceCollection services)
-    {
-        // Unit of Work � scoped to the HTTP request
-        services.AddScoped<IUnitOfWork, Persistence.UnitOfWork>();
-
-        // Auth-specific repos � injected directly into handlers (not via UoW)
-        services.AddScoped<ITokenStoreRepository, TokenStoreRepository>();
-        services.AddScoped<IOtpStoreRepository, OtpStoreRepository>();
-
-        // Search repo � injected directly into search service and sync job
-        services.AddScoped<ISearchRepository, SearchRepository>();
-
-        services.AddScoped<IProductRepository, ProductRepository>();
-
-        // -- ADD this line inside the existing AddRepositories() method ----------------
-        services.AddScoped<IBannerRepository, BannerRepository>();
-
-        services.AddScoped<IRateLimitRepository, RateLimitRepository>();
-        // NOTE: The remaining feature repositories are registered automatically
-        // through IUnitOfWork lazy initialization (Part 5 UnitOfWork.cs).
-        // Individual repos are only registered here when a handler injects
-        // them DIRECTLY instead of going through IUnitOfWork.
-
-        return services;
-    }
-}
-
-
-================================================================================
+====================================================================================================
 FILE: src/EcommerceApp.API/Controllers/v1/PaymentsController.cs
-================================================================================
+====================================================================================================
 
 using EcommerceApp.Application.Common;
 using EcommerceApp.Application.Features.Payments.Commands;
@@ -1027,331 +1875,261 @@ public class PaymentsController : ControllerBase
 }
 
 
-================================================================================
-FILE: src/EcommerceApp.API/Program.cs
-================================================================================
+====================================================================================================
+FILE: src/EcommerceApp.API/Controllers/v1/WishlistController.cs
+====================================================================================================
 
-using EcommerceApp.API.Filters;
-using EcommerceApp.API.Middleware;
-using EcommerceApp.API.Services;
-using EcommerceApp.Application;
-using EcommerceApp.Application.Common;
-using EcommerceApp.Domain.Interfaces;
-using EcommerceApp.Infrastructure;
-using EcommerceApp.Infrastructure.Notifications;
-using EcommerceApp.Infrastructure.Persistence;
-using EcommerceApp.Infrastructure.Persistence.Seeders;
-using EcommerceApp.Infrastructure.Services;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
-using Stripe;
-using System.Text;
-using System.Threading.RateLimiting;
-using Microsoft.EntityFrameworkCore;
+using EcommerceApp.Application.Features.Wishlist.Commands;
+using EcommerceApp.Application.Features.Wishlist.DTOs;
+using EcommerceApp.Application.Features.Wishlist.Queries;
+using MediatR;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
-var builder = WebApplication.CreateBuilder(args);
+namespace EcommerceApp.API.Controllers.v1;
 
-
-StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"]
-    ?? throw new InvalidOperationException("Stripe:SecretKey is not configured.");
-
-// -- Application layer -----------------------------------------------------
-builder.Services.AddApplication();
-
-// -- Infrastructure layer --------------------------------------------------
-builder.Services.AddInfrastructure(builder.Configuration);
-
-// -- HttpContext / CurrentUser ---------------------------------------------
-builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
-
-// -- JWT Authentication -----------------------------------------------------
-var jwtSecret = builder.Configuration["Jwt:Secret"]
-    ?? throw new InvalidOperationException("Jwt:Secret is not configured.");
-
-
-builder.Services
-    .AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(
-                                           Encoding.UTF8.GetBytes(jwtSecret)),
-            ValidateIssuer = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(30)
-        };
-
-        // Return JSON 401 instead of redirect � API clients expect JSON
-        options.Events = new JwtBearerEvents
-        {
-            OnChallenge = ctx =>
-            {
-                ctx.HandleResponse();
-                ctx.Response.StatusCode = 401;
-                ctx.Response.ContentType = "application/json";
-                return ctx.Response.WriteAsync(
-                    """{"statusCode":401,"message":"Unauthorized"}""");
-            },
-            OnForbidden = ctx =>
-            {
-                ctx.Response.StatusCode = 403;
-                ctx.Response.ContentType = "application/json";
-                return ctx.Response.WriteAsync(
-                    """{"statusCode":403,"message":"Forbidden"}""");
-            }
-        };
-    });
-
-builder.Services.AddAuthorization();
-
-// -- Controllers with ValidateModelFilter ----------------------------------
-builder.Services.AddControllers(options =>
+[ApiController]
+[Route("api/v1/wishlist")]
+[Authorize]
+public class WishlistController : ControllerBase
 {
-    options.Filters.Add<ValidateModelFilter>();
-});
+    private readonly ISender _sender;
 
-builder.Services.AddScoped<INotificationService, NotificationService>();
-builder.Services.AddScoped<IRateLimitService, RateLimitService>();
-
-builder.Services.AddRateLimiter(options =>
-{
-    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-
-    // Writes a consistent JSON body when the in-memory limiter rejects a request
-    options.OnRejected = async (ctx, ct) =>
+    public WishlistController(ISender sender)
     {
-        ctx.HttpContext.Response.ContentType = "application/json";
-
-        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
-            ctx.HttpContext.Response.Headers["Retry-After"] =
-                ((int)retryAfter.TotalSeconds).ToString();
-
-        await ctx.HttpContext.Response.WriteAsync(
-            """{"statusCode":429,"message":"Too many requests. Please slow down."}""",
-            ct);
-    };
-
-    // -- "products" policy: 60 req / min per IP --------------------------------
-    options.AddPolicy("products", httpContext =>
-        RateLimitPartition.GetSlidingWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new SlidingWindowRateLimiterOptions
-            {
-                PermitLimit = 60,
-                Window = TimeSpan.FromMinutes(1),
-                SegmentsPerWindow = 4,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 0
-            }));
-
-    // -- "search" policy: 30 req / min per IP ---------------------------------
-    options.AddPolicy("search", httpContext =>
-        RateLimitPartition.GetSlidingWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new SlidingWindowRateLimiterOptions
-            {
-                PermitLimit = 30,
-                Window = TimeSpan.FromMinutes(1),
-                SegmentsPerWindow = 4,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 0
-            }));
-
-    // -- "general" policy: 100 req / min per IP --------------------------------
-    // Applied to cart, wishlist, orders, banners
-    options.AddPolicy("general", httpContext =>
-        RateLimitPartition.GetSlidingWindowLimiter(
-            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            factory: _ => new SlidingWindowRateLimiterOptions
-            {
-                PermitLimit = 100,
-                Window = TimeSpan.FromMinutes(1),
-                SegmentsPerWindow = 4,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                QueueLimit = 0
-            }));
-});
-
-// -- Swagger with JWT bearer ------------------------------------------------
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "EcommerceApp API",
-        Version = "v1"
-    });
-
-    // JWT bearer definition � enables the Authorize button in Swagger UI
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. " +
-                       "Enter your token below (without the 'Bearer ' prefix).",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.Http,
-        Scheme = "bearer",
-        BearerFormat = "JWT"
-    });
-
-    // Apply globally � every endpoint shows the lock icon in Swagger UI
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id   = "Bearer"
-                }
-            },
-            Array.Empty<string>()
-        }
-    });
-});
-
-
-//frontend cors
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("FrontendPolicy", policy =>
-    {
-        policy
-            .WithOrigins(
-                "http://localhost:5173",   // Vite dev server
-                "http://localhost:3000"    // fallback / production preview
-            )
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
-    });
-});
-
-// -- Build ------------------------------------------------------------------
-var app = builder.Build();
-
-// -- Middleware pipeline (order matters) ------------------------------------
-
-// 1. Correlation ID first � every subsequent log entry gets the ID
-app.UseMiddleware<CorrelationIdMiddleware>();
-
-// 2. Global exception handler � catches anything thrown below this point
-app.UseMiddleware<ExceptionHandlingMiddleware>();
-
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "EcommerceApp v1");
-        c.DisplayRequestDuration();
-    });
-}
-
-app.UseCors("FrontendPolicy");
-
-//app.UseHttpsRedirection();
-
-if (!app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-}
-
-// 3. Authentication � parses and validates the JWT
-app.UseAuthentication();
-
-// 4. Session validation � confirms session is not revoked in DB
-app.UseMiddleware<SessionValidationMiddleware>();
-
-// 5. Authorization � enforces [Authorize] attributes
-app.UseAuthorization();
-
-app.UseRateLimiter();
-
-app.MapControllers();
-
-using (var scope = app.Services.CreateScope())
-{
-    var services = scope.ServiceProvider;
-    try
-    {
-        var context = services.GetRequiredService<AppDbContext>();
-        var logger = services.GetRequiredService<ILogger<Program>>();
-
-        // Apply any pending EF migrations automatically
-        await context.Database.MigrateAsync();
-
-        // Seed admin user, banners, and sample products (idempotent)
-        await DbSeeder.SeedAsync(context, logger);
-
-        logger.LogInformation("Database migration and seeding completed.");
+        _sender = sender;
     }
-    catch (Exception ex)
+
+    [HttpGet]
+    [ProducesResponseType(typeof(WishlistDto), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetWishlist(CancellationToken ct)
     {
-        var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "An error occurred during database migration or seeding.");
-        throw;
+        var result = await _sender.Send(new GetWishlistQuery(), ct);
+        return Ok(result);
+    }
+
+    [HttpPost]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> AddToWishlist(
+        [FromBody] AddToWishlistRequest request,
+        CancellationToken ct)
+    {
+        await _sender.Send(new AddToWishlistCommand(request.ProductId), ct);
+        return Ok(new { message = "Item added to wishlist." });
+    }
+
+    [HttpDelete("{wishlistId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveWishlistItem(
+        Guid wishlistId,
+        CancellationToken ct)
+    {
+        await _sender.Send(new RemoveWishlistItemCommand(wishlistId), ct);
+        return Ok(new { message = "Wishlist item removed." });
+    }
+
+    [HttpPost("{wishlistId:guid}/move-to-cart")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> MoveToCart(
+        Guid wishlistId,
+        CancellationToken ct)
+    {
+        await _sender.Send(new MoveWishlistItemToCartCommand(wishlistId), ct);
+        return Ok(new { message = "Wishlist item moved to cart." });
+    }
+
+    public class AddToWishlistRequest
+    {
+        public Guid ProductId { get; set; }
     }
 }
 
-app.Run();
 
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Addresses/DTOs/AddressDto.cs
+====================================================================================================
 
-================================================================================
-FILE: src/EcommerceApp.Infrastructure/Migrations/20260310100237_AddWishlistApiSupport.cs
-================================================================================
+namespace EcommerceApp.Application.Features.Addresses.DTOs;
 
-using Microsoft.EntityFrameworkCore.Migrations;
-
-#nullable disable
-
-namespace EcommerceApp.Infrastructure.Migrations
+public class AddressDto
 {
-    /// <inheritdoc />
-    public partial class AddWishlistApiSupport : Migration
-    {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropIndex(
-                name: "IX_Wishlists_UserId_ProductId",
-                table: "Wishlists");
+    public Guid Id { get; set; }
+    public string FullName { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public string AddressLine1 { get; set; } = string.Empty;
+    public string? AddressLine2 { get; set; }
+    public string City { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+    public string PostalCode { get; set; } = string.Empty;
+    public string Country { get; set; } = string.Empty;
+    public bool IsDefault { get; set; }
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Wishlists_UserId_ProductId",
-                table: "Wishlists",
-                columns: new[] { "UserId", "ProductId" },
-                unique: true,
-                filter: "[IsDeleted] = 0");
-        }
+    // "Home" | "Work" | "Other"
+    public string AddressType { get; set; } = "Home";
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropIndex(
-                name: "IX_Wishlists_UserId_ProductId",
-                table: "Wishlists");
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Wishlists_UserId_ProductId",
-                table: "Wishlists",
-                columns: new[] { "UserId", "ProductId" },
-                unique: true);
-        }
-    }
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartDto.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Cart.DTOs;
+
+public class CartDto
+{
+    public Guid CartId { get; set; }
+    public Guid UserId { get; set; }
+    public int TotalItems { get; set; }
+    public decimal Subtotal { get; set; }
+    public bool HasOutOfStockItems { get; set; }
+    public bool HasPriceChanges { get; set; }
+    public List<CartItemDto> Items { get; set; } = new();
+}
+
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Cart/DTOs/CartItemDto.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Cart.DTOs;
+
+public class CartItemDto
+{
+    public Guid CartItemId { get; set; }
+    public Guid ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string ProductSlug { get; set; } = string.Empty;
+    public string? MainImageUrl { get; set; }
+
+    public int Quantity { get; set; }
+
+    // Snapshot at time of adding
+    public decimal PriceAtAddition { get; set; }
+
+    // Live price from Product
+    public decimal CurrentUnitPrice { get; set; }
+
+    public decimal LineTotal { get; set; }
+
+    public int AvailableStock { get; set; }
+    public bool IsOutOfStock { get; set; }
+    public bool HasPriceChanged { get; set; }
+    public bool IsActiveProduct { get; set; }
+}
+
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Orders/DTOs/OrderDetailsDto.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Orders.DTOs;
+
+public class OrderDetailsDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string PaymentStatus { get; set; } = string.Empty;
+    public string TrackingStatus { get; set; } = string.Empty;
+    public decimal SubTotal { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal ShippingAmount { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public DateTime? EstimatedDeliveryDate { get; set; }
+    public string? ShippingAddressSnapshot { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public List<OrderItemDetailsDto> Items { get; set; } = new();
+}
+
+public class OrderItemDetailsDto
+{
+    public Guid? ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string? ProductSlug { get; set; }
+    public string? ProductImageUrl { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal? DiscountedUnitPrice { get; set; }
+    public int Quantity { get; set; }
+    public decimal TotalPrice { get; set; }
+}
+
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Payments/DTOs/CheckoutDtos.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Payments.DTOs;
+
+public class CheckoutSessionResponseDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string SessionUrl { get; set; } = string.Empty;
+}
+
+public class CheckoutSessionStatusDto
+{
+    public Guid OrderId { get; set; }
+    public string OrderNumber { get; set; } = string.Empty;
+    public string SessionId { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;          // paid | pending | failed
+    public string PaymentStatus { get; set; } = string.Empty;   // domain payment status
+    public string TrackingStatus { get; set; } = string.Empty;
+    public bool IsPaid { get; set; }
+    public string? StripeSessionStatus { get; set; }
+    public string? StripePaymentStatus { get; set; }
+}
+
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Wishlist/DTOs/WishlistDto.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Wishlist.DTOs;
+
+public class WishlistDto
+{
+    public int TotalItems { get; set; }
+    public bool HasOutOfStockItems { get; set; }
+    public List<WishlistItemDto> Items { get; set; } = new();
+}
+
+
+====================================================================================================
+FILE: src/EcommerceApp.Application/Features/Wishlist/DTOs/WishlistItemDto.cs
+====================================================================================================
+
+namespace EcommerceApp.Application.Features.Wishlist.DTOs;
+
+public class WishlistItemDto
+{
+    public Guid WishlistId { get; set; }
+    public Guid ProductId { get; set; }
+
+    public string ProductName { get; set; } = string.Empty;
+    public string ProductSlug { get; set; } = string.Empty;
+    public string? MainImageUrl { get; set; }
+    public string? Brand { get; set; }
+
+    public decimal PriceAtAdd { get; set; }
+    public decimal CurrentPrice { get; set; }
+    public bool HasPriceChanged { get; set; }
+    public bool HasPriceDropped { get; set; }
+
+    public int AvailableStock { get; set; }
+    public bool IsOutOfStock { get; set; }
+    public bool IsActiveProduct { get; set; }
+
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+
+    public DateTime AddedAt { get; set; }
 }
 
 

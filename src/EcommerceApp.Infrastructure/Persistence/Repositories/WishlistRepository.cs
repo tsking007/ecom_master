@@ -50,11 +50,6 @@ public class WishlistRepository : GenericRepository<Wishlist>, IWishlistReposito
     public async Task<IReadOnlyList<Wishlist>> GetItemsEligibleForPriceDropAlertAsync(
         CancellationToken cancellationToken = default)
     {
-        // Find items where:
-        //   1. No alert has been sent yet (PriceDropAlertSentAt is null)
-        //   2. The product is currently cheaper than when it was wishlisted
-        //
-        // DiscountedPrice ?? Price is translated to COALESCE(DiscountedPrice, Price) in SQL
 
         return await _dbSet
             .Include(w => w.Product)

@@ -102,7 +102,11 @@ public class MoveWishlistItemToCartCommandHandler
         cart.LastActivityAt = DateTime.UtcNow;
         await _unitOfWork.Carts.UpdateAsync(cart, cancellationToken);
 
-        await _unitOfWork.Wishlists.SoftDeleteAsync(
+        //await _unitOfWork.Wishlists.SoftDeleteAsync(
+        //    wishlistItem,
+        //    cancellationToken);
+
+        await _unitOfWork.Wishlists.HardDeleteAsync(
             wishlistItem,
             cancellationToken);
 

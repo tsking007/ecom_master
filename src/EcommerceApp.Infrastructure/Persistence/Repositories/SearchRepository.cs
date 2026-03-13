@@ -27,7 +27,6 @@ public class SearchRepository : ISearchRepository
         CancellationToken cancellationToken = default)
     {
         var existing = await _context.ElasticStores
-            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(
                 e => e.ProductId == entry.ProductId,
                 cancellationToken);
@@ -55,7 +54,6 @@ public class SearchRepository : ISearchRepository
             existing.ReviewCount = entry.ReviewCount;
             existing.SoldCount = entry.SoldCount;
             existing.IsActive = entry.IsActive;
-            existing.IsDeleted = entry.IsDeleted;
             existing.ThumbnailImageUrl = entry.ThumbnailImageUrl;
             existing.LastSyncedAt = DateTime.UtcNow;
             existing.UpdatedAt = DateTime.UtcNow;
@@ -69,18 +67,17 @@ public class SearchRepository : ISearchRepository
         CancellationToken cancellationToken = default)
     {
         var entry = await _context.ElasticStores
-            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(
                 e => e.ProductId == productId,
                 cancellationToken);
 
         if (entry == null) return;
 
-        entry.IsDeleted = true;
-        entry.IsActive = false;
-        entry.UpdatedAt = DateTime.UtcNow;
+        //entry.IsActive = false;
+        //entry.UpdatedAt = DateTime.UtcNow;
 
-        _context.Entry(entry).State = EntityState.Modified;
+        _context.ElasticStores.Remove(entry);
+        //_context.Entry(entry).State = EntityState.Modified;
     }
 
     // ── SQL search fallback ───────────────────────────────────────────────────
@@ -118,7 +115,6 @@ public class SearchRepository : ISearchRepository
         CancellationToken cancellationToken = default)
     {
         var products = await _context.Products
-            .Where(p => !p.IsDeleted)
             .ToListAsync(cancellationToken);
 
         foreach (var product in products)
@@ -140,7 +136,6 @@ public class SearchRepository : ISearchRepository
                 ReviewCount = product.ReviewCount,
                 SoldCount = product.SoldCount,
                 IsActive = product.IsActive,
-                IsDeleted = product.IsDeleted,
                 ThumbnailImageUrl = product.ImageUrls.FirstOrDefault(),
                 LastSyncedAt = DateTime.UtcNow
             };

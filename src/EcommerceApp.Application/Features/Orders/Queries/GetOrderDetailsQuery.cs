@@ -53,7 +53,6 @@ public class GetOrderDetailsQueryHandler
             ShippingAddressSnapshot = order.ShippingAddressSnapshot,
             CreatedAt = order.CreatedAt,
             Items = order.Items
-                .Where(x => !x.IsDeleted)
                 .Select(x => new OrderItemDetailsDto
                 {
                     ProductId = x.ProductId,

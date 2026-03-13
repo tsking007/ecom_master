@@ -28,7 +28,7 @@ public class WishlistConfiguration : IEntityTypeConfiguration<Wishlist>
         //    .HasDatabaseName("IX_Wishlists_UserId_ProductId");
         builder.HasIndex(w => new { w.UserId, w.ProductId })
             .IsUnique()
-            .HasFilter("[IsDeleted] = 0")
+            //.HasFilter("[IsDeleted] = 0")
             .HasDatabaseName("IX_Wishlists_UserId_ProductId");
 
         // PriceDropAlertService — find items eligible for price-drop notification
@@ -36,7 +36,7 @@ public class WishlistConfiguration : IEntityTypeConfiguration<Wishlist>
             .HasDatabaseName("IX_Wishlists_ProductId_PriceDropAlertSentAt");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(w => !w.IsDeleted);
+        //builder.HasQueryFilter(w => !w.IsDeleted);
 
         // ── Relationships ─────────────────────────────────────────────────────
         builder.HasOne(w => w.User)

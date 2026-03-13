@@ -5,7 +5,7 @@ import {
   Container, Row, Col, Card, Button, Badge,
   Spinner, Alert, Image, Table,
 } from 'react-bootstrap';
-import { FiTrash2, FiMinus, FiPlus, FiShoppingCart, FiArrowRight } from 'react-icons/fi';
+import { FiTrash2, FiMinus, FiPlus, FiShoppingCart, FiArrowRight, FiHeart } from 'react-icons/fi';
 import { toast } from 'react-toastify';
 import AppNavbar from '../components/layout/Navbar.jsx';
 import Footer from '../components/layout/Footer.jsx';
@@ -23,6 +23,10 @@ import {
   selectHasPriceChanges,
 } from '../store/slices/cartSlice.js';
 import { selectIsAuthenticated, selectCurrentUser } from '../store/slices/authSlice.js';
+import {
+  addToWishlistThunk,
+  selectWishlistMutating,
+} from '../store/slices/wishlistSlice.js';
 
 const PLACEHOLDER = 'https://placehold.co/80x80?text=?';
 
@@ -37,6 +41,7 @@ const CartPage = () => {
   const totalItems = useSelector(selectCartTotalItems);
   const loading = useSelector(selectCartLoading);
   const mutating = useSelector(selectCartMutating);
+  const wishlistMutating = useSelector(selectWishlistMutating);
   const hasOutOfStock = useSelector(selectHasOutOfStockItems);
   const hasPriceChanges = useSelector(selectHasPriceChanges);
 
@@ -91,6 +96,18 @@ const CartPage = () => {
     } else {
       toast.error('Could not remove item');
     }
+  };
+
+  const handleMoveToWishlist = async (cartItemId, productId, productName) => {
+    // 1. Add to wishlist
+    const wishResult = await dispatch(addToWishlistThunk(productId));
+    if (addToWishlistThunk.rejected.match(wishResult)) {
+      toast.error(wishResult.payload || 'Could not move to wishlist');
+      return;
+    }
+    // 2. Remove from cart
+    await dispatch(removeCartItemThunk(cartItemId));
+    toast.success(`"${productName}" moved to wishlist`);
   };
 
   const handleClearCart = async () => {
@@ -184,7 +201,7 @@ const CartPage = () => {
                       </Col>
 
                       {/* Name + badges */}
-                      <Col xs={9} sm={5}>
+                      <Col xs={9} sm={4}>
                         <Link
                           to={`/products/${item.productSlug}`}
                           className="text-decoration-none text-dark fw-semibold"
@@ -209,6 +226,17 @@ const CartPage = () => {
                             Was ₹{item.priceAtAddition?.toLocaleString('en-IN')}
                           </small>
                         )}
+                        {/* Move to Wishlist */}
+                        <Button
+                          variant="link"
+                          size="sm"
+                          className="text-secondary p-0 mt-1 d-flex align-items-center gap-1"
+                          style={{ fontSize: '0.78rem' }}
+                          onClick={() => handleMoveToWishlist(item.cartItemId, item.productId, item.productName)}
+                          disabled={mutating || wishlistMutating}
+                        >
+                          <FiHeart size={12} /> Move to Wishlist
+                        </Button>
                       </Col>
 
                       {/* Qty controls */}
@@ -245,7 +273,7 @@ const CartPage = () => {
                       </Col>
 
                       {/* Line total + remove */}
-                      <Col xs={6} sm={2} className="text-end">
+                      <Col xs={6} sm={3} className="text-end">
                         <div className="fw-bold text-primary">
                           ₹{item.lineTotal?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                         </div>

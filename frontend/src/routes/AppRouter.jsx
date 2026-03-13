@@ -16,6 +16,11 @@ import ProductListPage from '../pages/ProductListPage.jsx';
 import ProductDetailPage from '../pages/ProductDetailPage.jsx';
 import SearchResultsPage from '../pages/SearchResultsPage.jsx';
 import CartPage from '../pages/CartPage.jsx';
+import CheckoutPage from '../pages/CheckoutPage.jsx';
+import PaymentSuccessPage from '../pages/PaymentSuccessPage.jsx';
+import PaymentFailurePage from '../pages/PaymentFailurePage.jsx';
+import ProfilePage from '../pages/ProfilePage.jsx';
+import WishlistPage from '../pages/WishlistPage.jsx';
 
 // Redirect authenticated users away from auth-only pages
 const GuestRoute = ({ children }) => {
@@ -42,6 +47,11 @@ const AppRouter = () => {
 
         {/* ── Protected ─────────────────────────────────────────── */}
         <Route path="/cart" element={<ProtectedRoute><CartPage /></ProtectedRoute>} />
+        <Route path="/checkout" element={<ProtectedRoute><CheckoutPage /></ProtectedRoute>} />
+        <Route path="/payment/success" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
+        <Route path="/payment/failure" element={<ProtectedRoute><PaymentFailurePage /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+        <Route path="/wishlist" element={<ProtectedRoute><WishlistPage /></ProtectedRoute>} />
 
         {/* ── Catch-all ─────────────────────────────────────────── */}
         <Route path="*" element={<Navigate to="/" replace />} />

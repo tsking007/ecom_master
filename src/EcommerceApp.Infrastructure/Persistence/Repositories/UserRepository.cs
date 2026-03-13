@@ -36,7 +36,7 @@ public class UserRepository : GenericRepository<User>, IUserRepository
         CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .Include(u => u.Addresses.Where(a => !a.IsDeleted))
+            .Include(u => u.Addresses)
             .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
     }
 

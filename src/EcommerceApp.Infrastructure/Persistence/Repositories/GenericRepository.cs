@@ -59,15 +59,15 @@ public class GenericRepository<T> : IRepository<T> where T : BaseEntity
         return Task.CompletedTask;
     }
 
-    public virtual Task SoftDeleteAsync(
-        T entity,
-        CancellationToken cancellationToken = default)
-    {
-        entity.IsDeleted = true;
-        entity.UpdatedAt = DateTime.UtcNow;
-        _context.Entry(entity).State = EntityState.Modified;
-        return Task.CompletedTask;
-    }
+    //public virtual Task SoftDeleteAsync(
+    //    T entity,
+    //    CancellationToken cancellationToken = default)
+    //{
+    //    entity.IsDeleted = true;
+    //    entity.UpdatedAt = DateTime.UtcNow;
+    //    _context.Entry(entity).State = EntityState.Modified;
+    //    return Task.CompletedTask;
+    //}
 
     public virtual Task HardDeleteAsync(
         T entity,

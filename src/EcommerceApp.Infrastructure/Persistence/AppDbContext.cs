@@ -62,7 +62,6 @@ public class AppDbContext : DbContext
                     entry.Entity.UpdatedAt = now;
                     entry.Entity.CreatedBy = userId;
                     entry.Entity.UpdatedBy = userId;
-                    entry.Entity.IsDeleted = false;
                     break;
 
                 case EntityState.Modified:

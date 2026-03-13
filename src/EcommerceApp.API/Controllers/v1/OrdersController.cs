@@ -32,4 +32,19 @@ public class OrdersController : ControllerBase
 
         return Ok(result);
     }
+
+    [HttpGet]
+    [ProducesResponseType(typeof(List<OrderDetailsDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<List<OrderDetailsDto>>> GetUserOrders(
+    [FromQuery] int pageNumber = 1,
+    [FromQuery] int pageSize = 10,
+    CancellationToken cancellationToken = default)
+    {
+        var result = await _sender.Send(
+            new GetUserOrdersQuery(pageNumber, pageSize),
+            cancellationToken);
+
+        return Ok(result);
+    }
 }

@@ -51,7 +51,6 @@ public class CreateCheckoutSessionCommandHandler
             ?? throw new ValidationException("Cart is empty.");
 
         var activeItems = cart.Items
-            .Where(i => !i.IsDeleted)
             .ToList();
 
         if (activeItems.Count == 0)
@@ -74,8 +73,8 @@ public class CreateCheckoutSessionCommandHandler
         }
 
         var address = request.AddressId.HasValue
-            ? user.Addresses.FirstOrDefault(a => a.Id == request.AddressId.Value && !a.IsDeleted)
-            : user.Addresses.FirstOrDefault(a => a.IsDefault && !a.IsDeleted);
+            ? user.Addresses.FirstOrDefault(a => a.Id == request.AddressId.Value)
+            : user.Addresses.FirstOrDefault(a => a.IsDefault);
 
         if (address == null)
             throw new ValidationException("A valid shipping address is required for checkout.");

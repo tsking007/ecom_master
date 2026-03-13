@@ -51,7 +51,7 @@ public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
             .HasDatabaseName("IX_OrderItems_ProductId");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(oi => !oi.IsDeleted);
+        //builder.HasQueryFilter(oi => !oi.IsDeleted);
         // Order FK and Product FK are configured in their respective configurations
     }
 }

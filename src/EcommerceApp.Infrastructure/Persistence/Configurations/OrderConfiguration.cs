@@ -100,7 +100,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
             .HasDatabaseName("IX_Orders_CreatedAt");
 
         // ── Soft-delete query filter ──────────────────────────────────────────
-        builder.HasQueryFilter(o => !o.IsDeleted);
+        //builder.HasQueryFilter(o => !o.IsDeleted);
 
         // ── Relationships ─────────────────────────────────────────────────────
         builder.HasOne(o => o.User)
