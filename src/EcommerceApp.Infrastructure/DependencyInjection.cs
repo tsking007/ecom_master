@@ -30,11 +30,38 @@ public static class DependencyInjection
             .AddRepositories()
             .AddNotifications(configuration)
             .AddSearch(configuration)
-            .AddPayments(configuration);
+            .AddPayments(configuration)
+            .AddCaching(configuration);
 
         return services;
     }
 
+    // -- Caching ---------------------------------------------------------------
+
+    private static IServiceCollection AddCaching(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var redisConnectionString = configuration.GetConnectionString("Redis");
+
+        if (!string.IsNullOrWhiteSpace(redisConnectionString))
+        {
+            // Production / Staging: real Redis
+            services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = redisConnectionString;
+                options.InstanceName = "EcommerceApp:";   // all keys prefixed
+            });
+        }
+        else
+        {
+            // Local dev fallback: in-memory distributed cache
+            // so the app works without a Redis instance running.
+            services.AddDistributedMemoryCache();
+        }
+
+        return services;
+    }
 
     //Payments
     private static IServiceCollection AddPayments(
