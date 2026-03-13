@@ -109,6 +109,8 @@ public static class DependencyInjection
         // (SQL provider's SyncAllAsync is a no-op, so no wasted work)
         services.AddHostedService<ProductSearchSyncService>();
 
+        services.AddHostedService<StockReservationReleaseService>();
+
         return services;
     }
 

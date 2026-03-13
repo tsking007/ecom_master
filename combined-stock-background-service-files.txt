@@ -1,0 +1,1409 @@
+========================================
+FILE: src/EcommerceApp.Domain/Entities/StockReservation.cs
+========================================
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class StockReservation : BaseEntity
+{
+    public Guid ProductId { get; set; }
+    public Guid UserId { get; set; }
+    public int Quantity { get; set; }
+
+    // The Stripe Checkout Session ID that created this reservation
+    public string StripeSessionId { get; set; } = string.Empty;
+
+    // Reservation auto-expires after App__StockReservationExpiryMinutes (default 15)
+    public DateTime ExpiresAt { get; set; }
+
+    public bool IsReleased { get; set; } = false;
+    public DateTime? ReleasedAt { get; set; }
+
+    // -- Navigation ------------------------------------------------------------
+    public Product Product { get; set; } = null!;
+    public User User { get; set; } = null!;
+}
+
+
+========================================
+FILE: src/EcommerceApp.Domain/Interfaces/IStockReservationRepository.cs
+========================================
+using EcommerceApp.Domain.Entities;
+
+namespace EcommerceApp.Domain.Interfaces;
+
+public interface IStockReservationRepository : IRepository<StockReservation>
+{
+    Task<IReadOnlyList<StockReservation>> GetActiveBySessionIdAsync(
+        string stripeSessionId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StockReservation>> GetActiveByOrderProductsAsync(
+        Guid userId,
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default);
+}
+
+
+========================================
+FILE: src/EcommerceApp.Domain/Interfaces/IProductRepository.cs
+========================================
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+
+namespace EcommerceApp.Domain.Interfaces;
+
+public interface IProductRepository : IRepository<Product>
+{
+    Task<Product?> GetBySlugAsync(
+        string slug,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Loads product with its approved reviews for the detail page.</summary>
+    Task<Product?> GetWithReviewsAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Full catalog query — every catalog filter, sort, and pagination param.
+    /// Null parameters are ignored (treated as "no filter").
+    /// </summary>
+    Task<PagedResult<Product>> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        string? category,
+        string? subCategory,
+        decimal? minPrice,
+        decimal? maxPrice,
+        double? minRating,
+        string? brand,
+        string? sortBy,
+        bool sortDescending,
+        bool? isActive,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Product>> GetBestsellersAsync(
+        int count,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Product>> GetFeaturedAsync(
+        int count,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<string>> GetDistinctCategoriesAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>Returns each category paired with how many active products it has.</summary>
+    Task<IReadOnlyList<(string Category, int Count)>> GetCategoriesWithCountAsync(
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Recalculates and persists AverageRating and ReviewCount
+    /// from the ProductReviews table for the given product.
+    /// Called after every review create / delete.
+    /// </summary>
+    Task UpdateAverageRatingAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> SlugExistsAsync(
+        string slug,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks if the slug is used by any product OTHER than excludeProductId.
+    /// Used during product update to allow keeping the same slug.
+    /// </summary>
+    Task<bool> SlugExistsForOtherProductAsync(
+        string slug,
+        Guid excludeProductId,
+        CancellationToken cancellationToken = default);
+}
+
+
+========================================
+FILE: src/EcommerceApp.Domain/Entities/Product.cs
+========================================
+using EcommerceApp.Domain.Common;
+
+namespace EcommerceApp.Domain.Entities;
+
+public class Product : BaseEntity
+{
+    public string Name { get; set; } = string.Empty;
+
+    // URL-friendly unique identifier e.g. "apple-iphone-15-pro-128gb"
+    public string Slug { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+    public string? ShortDescription { get; set; }
+    public decimal Price { get; set; }
+    public decimal? DiscountedPrice { get; set; }
+
+    // Total physical stock in warehouse
+    public int StockQuantity { get; set; } = 0;
+
+    // Units currently locked by pending Stripe checkout sessions
+    public int ReservedQuantity { get; set; } = 0;
+
+    public string Category { get; set; } = string.Empty;
+    public string? SubCategory { get; set; }
+    public string? Brand { get; set; }
+
+    // Stored as JSON array in the database column
+    public List<string> ImageUrls { get; set; } = new();
+    public string? VideoUrl { get; set; }
+    public List<string> Tags { get; set; } = new();
+
+    public double AverageRating { get; set; } = 0;
+    public int ReviewCount { get; set; } = 0;
+    public int SoldCount { get; set; } = 0;
+    public bool IsActive { get; set; } = true;
+    public bool IsFeatured { get; set; } = false;
+    public decimal? Weight { get; set; }
+    public string? Dimensions { get; set; }
+
+    // -- Computed --------------------------------------------------------------
+
+    // The price customers actually pay
+    public decimal EffectivePrice => DiscountedPrice ?? Price;
+
+    // % discount shown on the UI (null if no discount)
+    public decimal? DiscountPercentage => DiscountedPrice.HasValue && Price > 0
+        ? Math.Round((1 - DiscountedPrice.Value / Price) * 100, 0)
+        : null;
+
+    // How many units can still be added to cart
+    public int AvailableStock => Math.Max(0, StockQuantity - ReservedQuantity);
+
+    // -- Navigation ------------------------------------------------------------
+    public ICollection<CartItem> CartItems { get; set; }
+        = new List<CartItem>();
+    public ICollection<OrderItem> OrderItems { get; set; }
+        = new List<OrderItem>();
+    public ICollection<ProductReview> Reviews { get; set; }
+        = new List<ProductReview>();
+    public ICollection<Wishlist> WishlistItems { get; set; }
+        = new List<Wishlist>();
+    public ICollection<StockReservation> StockReservations { get; set; }
+        = new List<StockReservation>();
+    public ElasticStore? ElasticStoreEntry { get; set; }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/Repositories/StockReservationRepository.cs
+========================================
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace EcommerceApp.Infrastructure.Persistence.Repositories;
+
+public class StockReservationRepository
+    : GenericRepository<StockReservation>, IStockReservationRepository
+{
+    public StockReservationRepository(AppDbContext context) : base(context) { }
+
+    public async Task<IReadOnlyList<StockReservation>> GetActiveBySessionIdAsync(
+        string stripeSessionId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(x => x.Product)
+            .Where(x =>
+                x.StripeSessionId == stripeSessionId &&
+                !x.IsReleased)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<StockReservation>> GetActiveByOrderProductsAsync(
+        Guid userId,
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (productIds.Count == 0)
+            return Array.Empty<StockReservation>();
+
+        return await _dbSet
+            .Include(x => x.Product)
+            .Where(x =>
+                x.UserId == userId &&
+                !x.IsReleased &&
+                productIds.Contains(x.ProductId))
+            .ToListAsync(cancellationToken);
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/Repositories/ProductRepository.cs
+========================================
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using EcommerceApp.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace EcommerceApp.Infrastructure.Persistence.Repositories;
+
+public class ProductRepository : GenericRepository<Product>, IProductRepository
+{
+    public ProductRepository(AppDbContext context) : base(context) { }
+
+    // -- Single-product reads --------------------------------------------------
+
+    public async Task<Product?> GetBySlugAsync(
+        string slug,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .FirstOrDefaultAsync(
+                p => p.Slug == slug && p.IsActive,
+                cancellationToken);
+    }
+
+    public async Task<Product?> GetWithReviewsAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Include(p => p.Reviews.Where(r => r.IsApproved))
+                .ThenInclude(r => r.User)
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+    }
+
+    // -- Full catalog query ----------------------------------------------------
+
+    public async Task<PagedResult<Product>> GetPagedAsync(
+        int pageNumber,
+        int pageSize,
+        string? category,
+        string? subCategory,
+        decimal? minPrice,
+        decimal? maxPrice,
+        double? minRating,
+        string? brand,
+        string? sortBy,
+        bool sortDescending,
+        bool? isActive,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet.AsQueryable();
+
+        // -- Filters -----------------------------------------------------------
+        if (!string.IsNullOrWhiteSpace(category))
+            query = query.Where(p =>
+                p.Category.ToLower() == category.ToLower());
+
+        if (!string.IsNullOrWhiteSpace(subCategory))
+            query = query.Where(p =>
+                p.SubCategory != null &&
+                p.SubCategory.ToLower() == subCategory.ToLower());
+
+        if (minPrice.HasValue)
+            query = query.Where(p =>
+                (p.DiscountedPrice ?? p.Price) >= minPrice.Value);
+
+        if (maxPrice.HasValue)
+            query = query.Where(p =>
+                (p.DiscountedPrice ?? p.Price) <= maxPrice.Value);
+
+        if (minRating.HasValue)
+            query = query.Where(p => p.AverageRating >= minRating.Value);
+
+        if (!string.IsNullOrWhiteSpace(brand))
+            query = query.Where(p =>
+                p.Brand != null &&
+                p.Brand.ToLower() == brand.ToLower());
+
+        if (isActive.HasValue)
+            query = query.Where(p => p.IsActive == isActive.Value);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        // -- Sorting -----------------------------------------------------------
+        // EF Core translates (DiscountedPrice ?? Price) ? COALESCE(DiscountedPrice, Price)
+        //query = sortBy?.ToLower() switch
+        //{
+        //    "price-asc" => query.OrderBy(p => p.DiscountedPrice ?? p.Price),
+        //    "price-desc" => query.OrderByDescending(p => p.DiscountedPrice ?? p.Price),
+        //    "rating" => query.OrderByDescending(p => p.AverageRating),
+        //    "popular" => query.OrderByDescending(p => p.SoldCount),
+        //    "oldest" => query.OrderBy(p => p.CreatedAt),
+        //    _ => query.OrderByDescending(p => p.CreatedAt)     // default: newest
+        //};
+        IOrderedQueryable<Product> orderedQuery = sortBy?.ToLower() switch
+        {
+            "price" => sortDescending
+                ? query.OrderByDescending(p => p.DiscountedPrice ?? p.Price)
+                : query.OrderBy(p => p.DiscountedPrice ?? p.Price),
+
+            "rating" => sortDescending
+                ? query.OrderByDescending(p => p.AverageRating)
+                : query.OrderBy(p => p.AverageRating),
+
+            "soldcount" => sortDescending
+                ? query.OrderByDescending(p => p.SoldCount)
+                : query.OrderBy(p => p.SoldCount),
+
+            "createdat" => sortDescending
+                ? query.OrderByDescending(p => p.CreatedAt)
+                : query.OrderBy(p => p.CreatedAt),
+
+            "name" => sortDescending
+                ? query.OrderByDescending(p => p.Name)
+                : query.OrderBy(p => p.Name),
+
+            _ => query.OrderByDescending(p => p.CreatedAt)
+        };
+
+        var items = await orderedQuery
+            .Skip((pageNumber - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return PagedResult<Product>.Create(items, totalCount, pageNumber, pageSize);
+    }
+
+    // -- Home page sections ----------------------------------------------------
+
+    public async Task<IReadOnlyList<Product>> GetBestsellersAsync(
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive)
+            .OrderByDescending(p => p.SoldCount)
+            .Take(count)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Product>> GetFeaturedAsync(
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive && p.IsFeatured)
+            .OrderByDescending(p => p.CreatedAt)
+            .Take(count)
+            .ToListAsync(cancellationToken);
+    }
+
+    // -- Category helpers ------------------------------------------------------
+
+    public async Task<IReadOnlyList<string>> GetDistinctCategoriesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .Where(p => p.IsActive)
+            .Select(p => p.Category)
+            .Distinct()
+            .OrderBy(c => c)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<(string Category, int Count)>> GetCategoriesWithCountAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _dbSet
+            .Where(p => p.IsActive)
+            .GroupBy(p => p.Category)
+            .Select(g => new { Category = g.Key, Count = g.Count() })
+            .OrderBy(x => x.Category)
+            .ToListAsync(cancellationToken);
+
+        return result
+            .Select(x => (x.Category, x.Count))
+            .ToList();
+    }
+
+    // -- Rating recalculation --------------------------------------------------
+
+    public async Task UpdateAverageRatingAsync(
+        Guid productId,
+        CancellationToken cancellationToken = default)
+    {
+        var stats = await _context.ProductReviews
+            .Where(r => r.ProductId == productId && r.IsApproved)
+            .GroupBy(r => r.ProductId)
+            .Select(g => new
+            {
+                AverageRating = g.Average(r => (double)r.Rating),
+                ReviewCount = g.Count()
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var product = await _dbSet
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+
+        if (product == null) return;
+
+        product.AverageRating = stats?.AverageRating ?? 0.0;
+        product.ReviewCount = stats?.ReviewCount ?? 0;
+        product.UpdatedAt = DateTime.UtcNow;
+
+        _context.Entry(product).State = EntityState.Modified;
+    }
+
+    // -- Slug checks -----------------------------------------------------------
+
+    public async Task<bool> SlugExistsAsync(
+        string slug,
+        CancellationToken cancellationToken = default)
+    {
+        // IgnoreQueryFilters — a slug used by a soft-deleted product is still reserved
+        return await _dbSet
+            //.IgnoreQueryFilters()
+            .AnyAsync(p => p.Slug == slug, cancellationToken);
+    }
+
+    public async Task<bool> SlugExistsForOtherProductAsync(
+        string slug,
+        Guid excludeProductId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            //.IgnoreQueryFilters()
+            .AnyAsync(
+                p => p.Slug == slug && p.Id != excludeProductId,
+                cancellationToken);
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/AppDbContext.cs
+========================================
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Common;
+using EcommerceApp.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using System.Reflection;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+public class AppDbContext : DbContext
+{
+    private readonly ICurrentUserService _currentUserService;
+
+    public AppDbContext(
+        DbContextOptions<AppDbContext> options,
+        ICurrentUserService currentUserService)
+        : base(options)
+    {
+        _currentUserService = currentUserService;
+    }
+
+    // -- DbSets ----------------------------------------------------------------
+    public DbSet<User> Users => Set<User>();
+    public DbSet<OtpStore> OtpStores => Set<OtpStore>();
+    public DbSet<TokenStore> TokenStores => Set<TokenStore>();
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<CartItem> CartItems => Set<CartItem>();
+    public DbSet<ElasticStore> ElasticStores => Set<ElasticStore>();
+    public DbSet<Cart> Carts => Set<Cart>();
+    public DbSet<StockReservation> StockReservations => Set<StockReservation>();
+    public DbSet<Order> Orders => Set<Order>();
+    public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<Address> Addresses => Set<Address>();
+    public DbSet<Banner> Banners => Set<Banner>();
+    public DbSet<ProductReview> ProductReviews => Set<ProductReview>();
+    public DbSet<Wishlist> Wishlists => Set<Wishlist>();
+    public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+    public DbSet<RateLimitLog> RateLimitLogs => Set<RateLimitLog>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Scans this assembly and applies every IEntityTypeConfiguration<T> class.
+        // Each configuration is responsible for its own query filter,
+        // column types, indexes, and FK relationships.
+        modelBuilder.ApplyConfigurationsFromAssembly(Assembly.GetExecutingAssembly());
+
+        base.OnModelCreating(modelBuilder);
+    }
+
+    // -- Audit field auto-population -------------------------------------------
+    public override async Task<int> SaveChangesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+        var userId = _currentUserService.UserId;
+
+        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    entry.Entity.CreatedAt = now;
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.CreatedBy = userId;
+                    entry.Entity.UpdatedBy = userId;
+                    break;
+
+                case EntityState.Modified:
+                    entry.Entity.UpdatedAt = now;
+                    entry.Entity.UpdatedBy = userId;
+                    // Never allow overwriting the original author / timestamp
+                    entry.Property(e => e.CreatedAt).IsModified = false;
+                    entry.Property(e => e.CreatedBy).IsModified = false;
+                    break;
+            }
+        }
+
+        return await base.SaveChangesAsync(cancellationToken);
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/Persistence/UnitOfWork.cs
+========================================
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure.Persistence.Repositories;
+using Microsoft.EntityFrameworkCore.Storage;
+
+namespace EcommerceApp.Infrastructure.Persistence;
+
+/// <summary>
+/// Ties all repositories to a single AppDbContext instance.
+/// Repositories are lazy-initialized — only created on first access.
+/// Inject IUnitOfWork when a use-case needs to span multiple repositories
+/// in a single atomic operation.
+/// Inject individual IRepository implementations directly for single-entity use-cases.
+/// </summary>
+public class UnitOfWork : IUnitOfWork
+{
+    private readonly AppDbContext _context;
+    private IDbContextTransaction? _currentTransaction;
+
+    // -- Lazy-initialized backing fields --------------------------------------
+    private IUserRepository? _users;
+    private IProductRepository? _products;
+    private ICartRepository? _carts;
+    private IOrderRepository? _orders;
+    private IReviewRepository? _reviews;
+    private IWishlistRepository? _wishlists;
+    private INotificationRepository? _notifications;
+    private IRateLimitRepository? _rateLimits;
+    private IStockReservationRepository? _stockReservations;
+    private IAddressRepository? _addresses;
+
+    public UnitOfWork(AppDbContext context)
+    {
+        _context = context;
+    }
+
+    // -- Repository accessors (lazy init) --------------------------------------
+
+    public IUserRepository Users =>
+        _users ??= new UserRepository(_context);
+
+    public IProductRepository Products =>
+        _products ??= new ProductRepository(_context);
+
+    public ICartRepository Carts =>
+        _carts ??= new CartRepository(_context);
+
+    public IOrderRepository Orders =>
+        _orders ??= new OrderRepository(_context);
+
+    public IReviewRepository Reviews =>
+        _reviews ??= new ReviewRepository(_context);
+
+    public IWishlistRepository Wishlists =>
+        _wishlists ??= new WishlistRepository(_context);
+
+    public INotificationRepository Notifications =>
+        _notifications ??= new NotificationRepository(_context);
+
+    public IRateLimitRepository RateLimits =>
+        _rateLimits ??= new RateLimitRepository(_context);
+
+    public IStockReservationRepository StockReservations =>
+        _stockReservations ??= new StockReservationRepository(_context);
+
+    public IAddressRepository Addresses =>
+    _addresses ??= new AddressRepository(_context);
+
+    // -- Persistence -----------------------------------------------------------
+
+    public async Task<int> SaveChangesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.SaveChangesAsync(cancellationToken);
+    }
+
+    // -- Transactions ----------------------------------------------------------
+
+    public async Task BeginTransactionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction != null)
+            throw new InvalidOperationException(
+                "A transaction is already in progress. " +
+                "Nested transactions are not supported.");
+
+        _currentTransaction =
+            await _context.Database.BeginTransactionAsync(cancellationToken);
+    }
+
+    public async Task CommitTransactionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction == null)
+            throw new InvalidOperationException(
+                "No active transaction to commit.");
+
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+            await _currentTransaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await RollbackTransactionAsync(cancellationToken);
+            throw;
+        }
+        finally
+        {
+            await _currentTransaction.DisposeAsync();
+            _currentTransaction = null;
+        }
+    }
+
+    public async Task RollbackTransactionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_currentTransaction == null) return;
+
+        try
+        {
+            await _currentTransaction.RollbackAsync(cancellationToken);
+        }
+        finally
+        {
+            await _currentTransaction.DisposeAsync();
+            _currentTransaction = null;
+        }
+    }
+
+    // -- IDisposable -----------------------------------------------------------
+
+    public void Dispose()
+    {
+        _currentTransaction?.Dispose();
+        _context.Dispose();
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/BackgroundServices/ProductSearchSyncService.cs
+========================================
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Events;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Application.Interfaces;
+using MediatR;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace EcommerceApp.Infrastructure.BackgroundServices;
+
+/// <summary>
+/// Background service that keeps the search index in sync with the database.
+///
+/// THREE sync mechanisms:
+///
+/// 1. Startup sync (SyncAllAsync)
+///    Runs once when the application starts. Rebuilds the entire search index
+///    from the Products table. Handles cold starts and schema migrations.
+///
+/// 2. Event-driven sync (INotificationHandler)
+///    Handles three domain events published by Product command handlers:
+///      - ProductCreatedNotification ? UpsertProductAsync
+///      - ProductUpdatedNotification ? UpsertProductAsync
+///      - ProductDeletedNotification ? DeleteProductAsync
+///    Keeps the index up-to-date in near real-time after admin changes.
+///
+/// 3. Scheduled full re-sync (every 24 hours)
+///    Catches any drift caused by direct DB edits, failed event handlers,
+///    or multi-instance deployments. Runs at 3:00 AM UTC by default.
+///    Uses a simple timer loop instead of Quartz to minimise dependencies —
+///    replace with a Quartz job in Part 25 if you need cron precision.
+/// </summary>
+public class ProductSearchSyncService
+    : BackgroundService,
+      INotificationHandler<ProductCreatedNotification>,
+      INotificationHandler<ProductUpdatedNotification>,
+      INotificationHandler<ProductDeletedNotification>
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly SearchSettings _settings;
+    private readonly ILogger<ProductSearchSyncService> _logger;
+
+    // Full re-sync interval — 24 hours
+    private static readonly TimeSpan ResyncInterval = TimeSpan.FromHours(24);
+
+    public ProductSearchSyncService(
+        IServiceScopeFactory scopeFactory,
+        IOptions<SearchSettings> settings,
+        ILogger<ProductSearchSyncService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _settings = settings.Value;
+        _logger = logger;
+    }
+
+    // -- BackgroundService.ExecuteAsync ----------------------------------------
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation(
+            "ProductSearchSyncService starting. Provider: {Provider}",
+            _settings.Provider);
+
+        // Startup full sync — runs once immediately
+        await RunSyncAllAsync(stoppingToken);
+
+        // Scheduled re-sync every 24 hours
+        using var timer = new PeriodicTimer(ResyncInterval);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await timer.WaitForNextTickAsync(stoppingToken);
+                _logger.LogInformation(
+                    "Running scheduled full search re-sync...");
+                await RunSyncAllAsync(stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Scheduled search re-sync failed — will retry in {Hours}h.",
+                    ResyncInterval.TotalHours);
+            }
+        }
+    }
+
+    // -- Domain event handlers --------------------------------------------------
+
+    public async Task Handle(
+        ProductCreatedNotification notification,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Indexing newly created product {ProductId} ({Name})",
+            notification.ProductId, notification.Name);
+
+        await UpsertFromDatabaseAsync(notification.ProductId, cancellationToken);
+    }
+
+    public async Task Handle(
+        ProductUpdatedNotification notification,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Re-indexing updated product {ProductId} ({Name})",
+            notification.ProductId, notification.Name);
+
+        await UpsertFromDatabaseAsync(notification.ProductId, cancellationToken);
+    }
+
+    public async Task Handle(
+        ProductDeletedNotification notification,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation(
+            "Removing deleted product {ProductId} from search index",
+            notification.ProductId);
+
+        using var scope = _scopeFactory.CreateScope();
+        var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
+
+        try
+        {
+            await searchService.DeleteProductAsync(notification.ProductId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to delete product {ProductId} from search index.",
+                notification.ProductId);
+        }
+    }
+
+    // -- Private helpers -------------------------------------------------------
+
+    private async Task RunSyncAllAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
+
+        try
+        {
+            await searchService.SyncAllAsync(ct);
+            _logger.LogInformation("Search full sync completed successfully.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Search full sync failed.");
+        }
+    }
+
+    private async Task UpsertFromDatabaseAsync(
+        Guid productId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
+
+        try
+        {
+            var product = await unitOfWork.Products.GetByIdAsync(productId, ct);
+            if (product == null)
+            {
+                _logger.LogWarning(
+                    "Product {ProductId} not found in DB — skipping index upsert.",
+                    productId);
+                return;
+            }
+
+            var doc = new SearchProductDocument(
+                Id: product.Id,
+                Name: product.Name,
+                Slug: product.Slug,
+                ShortDescription: product.ShortDescription,
+                Brand: product.Brand,
+                Price: product.Price,
+                DiscountedPrice: product.DiscountedPrice,
+                Category: product.Category,
+                SubCategory: product.SubCategory,
+                Tags: product.Tags,
+                MainImageUrl: product.ImageUrls.FirstOrDefault(),
+                AverageRating: product.AverageRating,
+                ReviewCount: product.ReviewCount,
+                SoldCount: product.SoldCount,
+                IsActive: product.IsActive);
+
+            await searchService.UpsertProductAsync(doc, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to upsert product {ProductId} into search index.",
+                productId);
+        }
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.Infrastructure/DependencyInjection.cs
+========================================
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure.Auth;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Application.Common.Interfaces;
+using EcommerceApp.Application.Interfaces;
+using EcommerceApp.Infrastructure.BackgroundServices;
+using EcommerceApp.Infrastructure.Search;
+using Microsoft.Extensions.Options;
+using Nest;
+using EcommerceApp.Infrastructure.Payments;
+
+namespace EcommerceApp.Infrastructure;
+
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services
+            .AddDatabase(configuration)
+            .AddAuthServices(configuration)
+            .AddRepositories()
+            .AddNotifications(configuration)
+            .AddSearch(configuration)
+            .AddPayments(configuration);
+
+        return services;
+    }
+
+
+    //Payments
+    private static IServiceCollection AddPayments(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        services.Configure<StripeSettings>(
+            configuration.GetSection(StripeSettings.SectionName));
+
+        services.AddScoped<IStripePaymentService, StripePaymentService>();
+
+        services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
+
+        services.AddScoped<IIdempotencyService, IdempotencyService>();
+
+        return services;
+    }
+
+    // -- Search ----------------------------------------------------------------
+
+    private static IServiceCollection AddSearch(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind SearchSettings section
+        services.Configure<SearchSettings>(
+            configuration.GetSection(SearchSettings.SectionName));
+
+        var provider = configuration
+            .GetSection(SearchSettings.SectionName)["Provider"] ?? "Sql";
+
+        //Console.WriteLine($"[Search] Provider from config = '{provider}'");
+
+        if (provider.Equals("Elasticsearch", StringComparison.OrdinalIgnoreCase))
+        {
+            // -- Elasticsearch -----------------------------------------------------
+            //Console.WriteLine("[Search] Registered ElasticsearchSearchService");
+            services.AddSingleton<IElasticClient>(sp =>
+            {
+                var settings = sp.GetRequiredService<IOptions<SearchSettings>>().Value;
+
+                var connectionSettings = new ConnectionSettings(new Uri(settings.Uri))
+                    .DefaultIndex(settings.IndexName)
+                    .EnableDebugMode()
+                    .PrettyJson();
+
+                // Add credentials only when configured (production)
+                if (!string.IsNullOrEmpty(settings.Username) &&
+                    !string.IsNullOrEmpty(settings.Password))
+                {
+                    connectionSettings.BasicAuthentication(
+                        settings.Username, settings.Password);
+                }
+
+                return new ElasticClient(connectionSettings);
+            });
+
+            services.AddScoped<ElasticsearchSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<ElasticsearchSearchService>());
+        }
+        else
+        {
+            //Console.WriteLine("[Search] Registered SqlSearchService");
+            // -- SQL fallback ------------------------------------------------------
+            services.AddScoped<SqlSearchService>();
+            services.AddScoped<ISearchService>(sp =>
+                sp.GetRequiredService<SqlSearchService>());
+        }
+
+        // Background sync service — runs regardless of provider
+        // (SQL provider's SyncAllAsync is a no-op, so no wasted work)
+        services.AddHostedService<ProductSearchSyncService>();
+
+        return services;
+    }
+
+    private static IServiceCollection AddNotifications(
+    this IServiceCollection services,
+    IConfiguration configuration)
+    {
+        // Bind "Notifications" section to NotificationSettings
+        services.Configure<NotificationSettings>(
+            configuration.GetSection(NotificationSettings.SectionName));
+
+        // Dev senders — log to console instead of calling real APIs.
+        // In Part 11/12 these are swapped for SendGrid and Twilio
+        // by checking IHostEnvironment.IsProduction() or a feature flag.
+        services.AddTransient<IEmailSender, DevEmailSender>();
+        services.AddTransient<ISmsSender, DevSmsSender>();
+
+        return services;
+    }
+
+    // -- Database --------------------------------------------------------------
+
+    private static IServiceCollection AddDatabase(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<AppDbContext>((sp, options) =>
+        {
+            options.UseSqlServer(
+                configuration.GetConnectionString("DefaultConnection"),
+                sqlOptions =>
+                {
+                    // Retry on transient SQL Server failures (e.g. brief network blips)
+                    sqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(30),
+                        errorNumbersToAdd: null);
+
+                    sqlOptions.MigrationsAssembly(
+                        typeof(AppDbContext).Assembly.FullName);
+                });
+        });
+
+        return services;
+    }
+
+    // -- Auth services ---------------------------------------------------------
+
+    private static IServiceCollection AddAuthServices(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        // Bind "Jwt" section to JwtSettings
+        services.Configure<JwtSettings>(
+            configuration.GetSection(JwtSettings.SectionName));
+
+        // Singleton: stateless — all fields are readonly after construction.
+        // Safe to share across requests.
+        services.AddSingleton<ITokenService, JwtTokenService>();
+
+        // Singleton: stateless (only uses RandomNumberGenerator and BCrypt)
+        services.AddSingleton<IOtpService, OtpService>();
+
+        // Singleton: stateless (only uses BCrypt and Regex)
+        services.AddSingleton<IPasswordService, PasswordService>();
+
+        // Scoped: wraps ITokenStoreRepository and IUnitOfWork which are both scoped
+        services.AddScoped<SessionService>();
+
+        return services;
+    }
+
+    // -- Repositories ----------------------------------------------------------
+
+    private static IServiceCollection AddRepositories(
+        this IServiceCollection services)
+    {
+        // Unit of Work — scoped to the HTTP request
+        services.AddScoped<IUnitOfWork, Persistence.UnitOfWork>();
+
+        // Auth-specific repos — injected directly into handlers (not via UoW)
+        services.AddScoped<ITokenStoreRepository, TokenStoreRepository>();
+        services.AddScoped<IOtpStoreRepository, OtpStoreRepository>();
+
+        // Search repo — injected directly into search service and sync job
+        services.AddScoped<ISearchRepository, SearchRepository>();
+
+        services.AddScoped<IProductRepository, ProductRepository>();
+
+        // -- ADD this line inside the existing AddRepositories() method ----------------
+        services.AddScoped<IBannerRepository, BannerRepository>();
+
+        services.AddScoped<IRateLimitRepository, RateLimitRepository>();
+
+        services.AddScoped<IAddressRepository, AddressRepository>();
+        // NOTE: The remaining feature repositories are registered automatically
+        // through IUnitOfWork lazy initialization (Part 5 UnitOfWork.cs).
+        // Individual repos are only registered here when a handler injects
+        // them DIRECTLY instead of going through IUnitOfWork.
+
+        return services;
+    }
+}
+
+
+========================================
+FILE: src/EcommerceApp.API/Program.cs
+========================================
+using EcommerceApp.API.Filters;
+using EcommerceApp.API.Middleware;
+using EcommerceApp.API.Services;
+using EcommerceApp.Application;
+using EcommerceApp.Application.Common;
+using EcommerceApp.Domain.Interfaces;
+using EcommerceApp.Infrastructure;
+using EcommerceApp.Infrastructure.Notifications;
+using EcommerceApp.Infrastructure.Persistence;
+using EcommerceApp.Infrastructure.Persistence.Seeders;
+using EcommerceApp.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Stripe;
+using System.Text;
+using System.Threading.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+StripeConfiguration.ApiKey = builder.Configuration["Stripe:SecretKey"]
+    ?? throw new InvalidOperationException("Stripe:SecretKey is not configured.");
+
+// -- Application layer -----------------------------------------------------
+builder.Services.AddApplication();
+
+// -- Infrastructure layer --------------------------------------------------
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// -- HttpContext / CurrentUser ---------------------------------------------
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+
+// -- JWT Authentication -----------------------------------------------------
+var jwtSecret = builder.Configuration["Jwt:Secret"]
+    ?? throw new InvalidOperationException("Jwt:Secret is not configured.");
+
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                                           Encoding.UTF8.GetBytes(jwtSecret)),
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        // Return JSON 401 instead of redirect — API clients expect JSON
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = ctx =>
+            {
+                ctx.HandleResponse();
+                ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":401,"message":"Unauthorized"}""");
+            },
+            OnForbidden = ctx =>
+            {
+                ctx.Response.StatusCode = 403;
+                ctx.Response.ContentType = "application/json";
+                return ctx.Response.WriteAsync(
+                    """{"statusCode":403,"message":"Forbidden"}""");
+            }
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// -- Controllers with ValidateModelFilter ----------------------------------
+builder.Services.AddControllers(options =>
+{
+    options.Filters.Add<ValidateModelFilter>();
+});
+
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IRateLimitService, RateLimitService>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    // Writes a consistent JSON body when the in-memory limiter rejects a request
+    options.OnRejected = async (ctx, ct) =>
+    {
+        ctx.HttpContext.Response.ContentType = "application/json";
+
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            ctx.HttpContext.Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString();
+
+        await ctx.HttpContext.Response.WriteAsync(
+            """{"statusCode":429,"message":"Too many requests. Please slow down."}""",
+            ct);
+    };
+
+    // -- "products" policy: 60 req / min per IP --------------------------------
+    options.AddPolicy("products", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "search" policy: 30 req / min per IP ---------------------------------
+    options.AddPolicy("search", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+
+    // -- "general" policy: 100 req / min per IP --------------------------------
+    // Applied to cart, wishlist, orders, banners
+    options.AddPolicy("general", httpContext =>
+        RateLimitPartition.GetSlidingWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 4,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0
+            }));
+});
+
+// -- Swagger with JWT bearer ------------------------------------------------
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "EcommerceApp API",
+        Version = "v1"
+    });
+
+    // JWT bearer definition — enables the Authorize button in Swagger UI
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. " +
+                       "Enter your token below (without the 'Bearer ' prefix).",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    // Apply globally — every endpoint shows the lock icon in Swagger UI
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id   = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+
+//frontend cors
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+    {
+        policy
+            .WithOrigins(
+                "http://localhost:5173",   // Vite dev server
+                "http://localhost:3000"    // fallback / production preview
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
+    });
+});
+
+// -- Build ------------------------------------------------------------------
+var app = builder.Build();
+
+// -- Middleware pipeline (order matters) ------------------------------------
+
+// 1. Correlation ID first — every subsequent log entry gets the ID
+app.UseMiddleware<CorrelationIdMiddleware>();
+
+// 2. Global exception handler — catches anything thrown below this point
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "EcommerceApp v1");
+        c.DisplayRequestDuration();
+    });
+}
+
+app.UseCors("FrontendPolicy");
+
+//app.UseHttpsRedirection();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
+// 3. Authentication — parses and validates the JWT
+app.UseAuthentication();
+
+// 4. Session validation — confirms session is not revoked in DB
+app.UseMiddleware<SessionValidationMiddleware>();
+
+// 5. Authorization — enforces [Authorize] attributes
+app.UseAuthorization();
+
+app.UseRateLimiter();
+
+app.MapControllers();
+
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<AppDbContext>();
+        var logger = services.GetRequiredService<ILogger<Program>>();
+
+        // Apply any pending EF migrations automatically
+        await context.Database.MigrateAsync();
+
+        // Seed admin user, banners, and sample products (idempotent)
+        await DbSeeder.SeedAsync(context, logger);
+
+        logger.LogInformation("Database migration and seeding completed.");
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred during database migration or seeding.");
+        throw;
+    }
+}
+
+app.Run();
+
+

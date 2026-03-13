@@ -37,4 +37,21 @@ public class StockReservationRepository
                 productIds.Contains(x.ProductId))
             .ToListAsync(cancellationToken);
     }
+
+    // NEW
+    /// <summary>
+    /// Returns all reservations that have passed their ExpiresAt timestamp
+    /// and have not yet been released. Includes the Product so the caller
+    /// can decrement ReservedQuantity without a second round-trip.
+    /// </summary>
+    public async Task<IReadOnlyList<StockReservation>> GetExpiredAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTime.UtcNow;
+
+        return await _dbSet
+            .Include(x => x.Product)
+            .Where(x => !x.IsReleased && x.ExpiresAt <= now)
+            .ToListAsync(cancellationToken);
+    }
 }

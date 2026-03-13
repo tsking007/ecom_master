@@ -12,4 +12,7 @@ public interface IStockReservationRepository : IRepository<StockReservation>
         Guid userId,
         IReadOnlyCollection<Guid> productIds,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<StockReservation>> GetExpiredAsync(
+        CancellationToken cancellationToken = default);
 }
